@@ -5,6 +5,8 @@ import webdataset as wds
 from io import BytesIO
 
 from torch.utils.data import IterableDataset, Dataset
+from einops import rearrange
+
 
 import os
 
@@ -27,6 +29,49 @@ def transform_points(points, transform, translate=True):
 
     points = np.einsum("nm,...m->...n", transform, points)
     return points[..., :3]
+
+
+def create_webdataset(path, mode, start_shard=0, end_shard=12):
+    def process_sample(sample):
+        images = [sample[f"{i:04d}.png"] for i in range(24)]
+        images = np.stack(images, 0)  # .astype(np.float32)
+
+        images = 2 * rearrange(images, "v h w c -> (v c) h w") - 1
+
+        result = {
+            "images": images,
+            "scene_hash": sample["__key__"],
+        }
+
+        return result
+
+    if start_shard == end_shard:
+        return (
+            wds.WebDataset(
+                os.path.join(
+                    path,
+                    f"NMR-{mode}-{start_shard:02d}.tar",
+                ),
+                shardshuffle=True,
+            )
+            .shuffle(100)
+            .decode("rgb")
+            .map(process_sample)
+        )
+
+    else:
+        return (
+            wds.WebDataset(
+                os.path.join(
+                    path,
+                    f"NMR-{mode}-{{{start_shard:02d}..{end_shard:02d}}}.tar",
+                ),
+                shardshuffle=True,
+            )
+            .shuffle(100)
+            .decode("rgb")
+            .map(process_sample)
+        )
 
 
 class NMRShardedDataset(Dataset):
@@ -106,11 +151,7 @@ class NMRShardedDataset(Dataset):
         images = [self.sample[f"{i:04d}.png"] for i in range(24)]
         images = np.stack(images, 0).astype(np.float32) / 255.0
 
-        images = images.reshape(
-            -1,
-            images.shape[1],
-            images.shape[2],
-        )
+        images = rearrange(images, "b h w c -> (b c) h w")
 
         result = {
             "images": images,

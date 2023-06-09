@@ -9,11 +9,13 @@ import torch.optim as optim
 import torch.multiprocessing as mp
 import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel
+from torchvision.utils import make_grid
+from einops import rearrange
 
 from utils.trainer import Trainer
 from utils.checkpoint import Checkpoint
 from utils.dist import init_ddp, worker_init_fn
-from data.dataset import NMRShardedDataset
+from data.dataset import NMRShardedDataset, create_webdataset
 from models.palette import PaletteViewSynthesis
 
 
@@ -63,15 +65,13 @@ if __name__ == "__main__":
 
     # Initialize datasets
     print("Loading training set...")
-    train_dataset = NMRShardedDataset(
-        config["data"]["params"]["train"]["params"]["path"], mode="train"
-    )
+    # train_dataset = NMRShardedDataset(**config["data"]["params"]["train"]["params"])
+    train_dataset = create_webdataset(**config["data"]["params"]["train"]["params"])
     print("Training set loaded.")
 
     print("Loading validation set...")
-    val_dataset = NMRShardedDataset(
-        config["data"]["params"]["test"]["params"]["path"], mode="test"
-    )
+    # val_dataset = NMRShardedDataset(**config["data"]["params"]["test"]["params"])
+    val_dataset = create_webdataset(**config["data"]["params"]["test"]["params"])
     print("Validation set loaded.")
 
     # Initialize data loaders
@@ -84,14 +84,11 @@ if __name__ == "__main__":
 
     if world_size > 1:
         train_sampler = torch.utils.data.distributed.DistributedSampler(
-            train_dataset, shuffle=True, drop_last=False
+            train_dataset, drop_last=False
         )
         val_sampler = torch.utils.data.distributed.DistributedSampler(
-            val_dataset, shuffle=True, drop_last=False
+            val_dataset, drop_last=False
         )
-
-    else:
-        shuffle = True
 
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
@@ -99,7 +96,6 @@ if __name__ == "__main__":
         num_workers=num_workers,
         pin_memory=True,
         sampler=train_sampler,
-        shuffle=shuffle,
         worker_init_fn=worker_init_fn,
         persistent_workers=True,
     )
@@ -109,11 +105,19 @@ if __name__ == "__main__":
         batch_size=max(1, batch_size // 8),
         num_workers=1,
         sampler=val_sampler,
-        shuffle=shuffle,
         pin_memory=False,
         worker_init_fn=worker_init_fn,
         persistent_workers=True,
     )
+
+    val_vis_loader = torch.utils.data.DataLoader(
+        val_dataset, batch_size=1, worker_init_fn=worker_init_fn
+    )
+    train_vis_loader = torch.utils.data.DataLoader(
+        train_dataset, batch_size=1, worker_init_fn=worker_init_fn
+    )
+    val_vis_data = next(iter(val_vis_loader))
+    train_vis_data = next(iter(train_vis_loader))
 
     # Initialize model
 
@@ -163,7 +167,10 @@ if __name__ == "__main__":
         else:
             print(f"Resuming wandb with existing run_id {run_id}.")
         wandb.init(
-            project="srt", name=os.path.dirname(args.config), id=run_id, resume=True
+            project="palette-view-synthesis",
+            name=os.path.dirname(args.config),
+            id=run_id,
+            resume=True,
         )
         wandb.config = config
 
@@ -173,7 +180,10 @@ if __name__ == "__main__":
     model.set_loss(F.mse_loss)
 
     masked_cnt = 3
-    test_eval = True
+    view_cnt = 24
+    in_chann = 3
+    test_eval = False
+
     while True:
         for batch in train_loader:
             it += 1
@@ -186,14 +196,29 @@ if __name__ == "__main__":
             ):
                 print("Running evaluation...")
                 eval_dict = dict()
-                for batch in val_loader:
-                    images = batch["images"].to(device)
-                    masked_ids = torch.randint(24, size=(masked_cnt,))
-                    mask = torch.ones_like(images).reshape(-1, 24, 64, 64, 3)
-                    mask[:, masked_ids, :, :, :] = 0
-                    mask = mask.reshape(-1, 72, 64, 64)
-                    model.generate(images, mask)
-                    print("generated something")
+                images = val_vis_data["images"].to(device)
+                print(torch.max(images), torch.min(images))
+                masked_ids = torch.randint(24, size=(masked_cnt,))
+                mask = rearrange(
+                    torch.zeros_like(images),
+                    "b (v c) h w -> b v c h w",
+                    v=view_cnt,
+                    c=in_chann,
+                )
+                mask[:, masked_ids, :, :, :] = 1
+                mask = rearrange(mask, "b v c h w -> b (v c) h w")
+                y_t, ret_arr = model.generate(images, mask)
+
+                generated_images = rearrange(
+                    ret_arr, "b (v c) h w -> (v b) c h w", v=view_cnt, c=in_chann
+                )
+
+                eval_dict["generated_images"] = wandb.Image(
+                    make_grid(
+                        generated_images,
+                        nrow=generated_images.shape[0] // view_cnt,
+                    )
+                )
 
                 if args.wandb:
                     wandb.log(eval_dict, step=it)

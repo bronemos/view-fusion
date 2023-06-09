@@ -1,5 +1,6 @@
 model:
   base_learning_rate: 1.0e-06
+  validate_every: 10000
   palette_params:
     beta_schedule:
       train:
