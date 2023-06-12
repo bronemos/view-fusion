@@ -40,7 +40,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-c", "--config", type=str, help="YAML config file")
     parser.add_argument("-gpus", "--gpu_ids", type=str, default=None)
-    parser.add_argument("-t", "--train" action="store_true", default=True)
+    parser.add_argument("-t", "--train", action="store_true", default=True)
     parser.add_argument("-s", action="store_true")
     parser.add_argument(
         "--wandb", action="store_true", help="Log run to Weights and Biases."
