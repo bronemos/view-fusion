@@ -1,26 +1,0 @@
-wandb: Currently logged in as: bronemos (ai-dl-aalto). Use `wandb login --relogin` to force relogin
-wandb: WARNING Tried to auto resume run with id bc7p71tc but id 9j19d6wl is set.
-wandb: wandb version 0.15.4 is available!  To upgrade, please run:
-wandb:  $ pip install wandb --upgrade
-wandb: Tracking run with wandb version 0.15.3
-wandb: Run data is saved locally in /scratch/work/spieglb1/palette-view-synthesis/wandb/run-20230611_173655-9j19d6wl
-wandb: Run `wandb offline` to turn off syncing.
-wandb: Syncing run /scratch/work/spieglb1/palette-view-synthesis/configs
-wandb: ⭐️ View project at https://wandb.ai/ai-dl-aalto/palette-view-synthesis
-wandb: 🚀 View run at https://wandb.ai/ai-dl-aalto/palette-view-synthesis/runs/9j19d6wl
-Loading training set...
-Training set loaded.
-Loading validation set...
-Validation set loaded.
-Initializing datalaoders, using 1 workers per process for data loading.
-Loading checkpoint from file /scratch/work/spieglb1/palette-view-synthesis/configs/model.pt...
-Sampled new wandb run_id 9j19d6wl.
-Running evaluation...
-wandb: Waiting for W&B process to finish... (failed 1). Press Control-C to abort syncing.
-wandb: - 0.003 MB of 0.003 MB uploaded (0.000 MB deduped)wandb: \ 0.003 MB of 0.003 MB uploaded (0.000 MB deduped)wandb: | 0.003 MB of 0.003 MB uploaded (0.000 MB deduped)wandb: / 0.003 MB of 0.003 MB uploaded (0.000 MB deduped)wandb: - 0.003 MB of 0.003 MB uploaded (0.000 MB deduped)wandb: 🚀 View run /scratch/work/spieglb1/palette-view-synthesis/configs at: https://wandb.ai/ai-dl-aalto/palette-view-synthesis/runs/9j19d6wl
-wandb: Synced 5 W&B file(s), 0 media file(s), 2 artifact file(s) and 0 other file(s)
-wandb: Find logs at: ./wandb/run-20230611_173655-9j19d6wl/logs
-Traceback (most recent call last):
-  File "main.py", line 200, in <module>
-    images = val_data["images"].to(device)
-TypeError: string indices must be integers
