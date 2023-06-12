@@ -1,6 +1,7 @@
 import argparse
 import os
 import yaml
+import time
 
 import numpy as np
 
@@ -39,7 +40,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-c", "--config", type=str, help="YAML config file")
     parser.add_argument("-gpus", "--gpu_ids", type=str, default=None)
-    parser.add_argument("-t", type=bool, default=True)
+    parser.add_argument("-t", "--train" action="store_true", default=True)
     parser.add_argument("-s", action="store_true")
     parser.add_argument(
         "--wandb", action="store_true", help="Log run to Weights and Biases."
@@ -55,7 +56,8 @@ if __name__ == "__main__":
     args.wandb = args.wandb and rank == 0
 
     max_it = config["model"].get("max_it", 1000000)
-    validate_every = config["model"].get("validate_ever", 5000)
+    validate_every = config["model"].get("validate_every", 5000)
+    log_every = config["model"].get("log_every", 10)
 
     exp_name = os.path.basename(os.path.dirname(args.config))
 
@@ -111,10 +113,10 @@ if __name__ == "__main__":
     )
 
     val_vis_loader = torch.utils.data.DataLoader(
-        val_dataset, batch_size=1, worker_init_fn=worker_init_fn
+        val_dataset, batch_size=12, worker_init_fn=worker_init_fn
     )
     train_vis_loader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=1, worker_init_fn=worker_init_fn
+        train_dataset, batch_size=12, worker_init_fn=worker_init_fn
     )
     val_vis_data = next(iter(val_vis_loader))
     train_vis_data = next(iter(train_vis_loader))
@@ -213,12 +215,13 @@ if __name__ == "__main__":
                     ret_arr, "b (v c) h w -> (v b) c h w", v=view_cnt, c=in_chann
                 )
 
-                eval_dict["generated_images"] = wandb.Image(
-                    make_grid(
-                        generated_images,
-                        nrow=generated_images.shape[0] // view_cnt,
+                for i, generated_image in enumerate(generated_images):
+                    eval_dict[f"generated_images_{i}"] = wandb.Image(
+                        make_grid(
+                            generated_images,
+                            nrow=generated_images.shape[0] // view_cnt,
+                        )
                     )
-                )
 
                 if args.wandb:
                     wandb.log(eval_dict, step=it)
@@ -227,12 +230,24 @@ if __name__ == "__main__":
             for param_group in optimizer.param_groups:
                 param_group["lr"] = new_lr
 
+            t0 = time.perf_counter()
+
             images = batch["images"].to(device)
             model.train()
             optimizer.zero_grad()
             loss = model(images)
             loss.backward()
             optimizer.step()
+            time_elapsed += time.perf_counter() - t0
+
+            if log_every > 0 and it % log_every == 0:
+                log_dict = dict()
+                log_dict["t"] = time_elapsed
+                log_dict["lr"] = new_lr
+                log_dict["loss"] = loss.item()
+
+                if args.wandb:
+                    wandb.log(log_dict, step=it)
 
             if it > max_it:
                 if rank == 0:

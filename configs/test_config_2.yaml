@@ -1,6 +1,7 @@
 model:
   base_learning_rate: 1.0e-06
   validate_every: 10000
+  log_every: 10
   palette_params:
     beta_schedule:
       train:
@@ -34,7 +35,7 @@ data:
       target: ldm.data.nmr_sharded.NMRShardedDataset
       params:
         start_shard: 0
-        end_shard: 0
+        end_shard: 12
         path: /scratch/work/spieglb1/datasets/NMR_sharded
         mode: train
 
@@ -42,7 +43,7 @@ data:
       target: ldm.data.nmr_sharded.NMRShardedDataset
       params:
         start_shard: 0
-        end_shard: 0
+        end_shard: 12
         path: /scratch/work/spieglb1/datasets/NMR_sharded
         mode: test
 
@@ -50,6 +51,6 @@ data:
       target: ldm.data.nmr_sharded.NMRShardedDataset
       params:
         start_shard: 0
-        end_shard: 0
+        end_shard: 12
         path: /scratch/work/spieglb1/datasets/NMR_sharded
         mode: val
