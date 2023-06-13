@@ -184,11 +184,13 @@ if __name__ == "__main__":
     masked_cnt = 3
     view_cnt = 24
     in_chann = 3
-    test_eval = False
+    test_eval = True
 
     while True:
         for batch in train_loader:
             it += 1
+            log_dict = dict()
+
             if rank == 0:
                 pass
 
@@ -197,34 +199,23 @@ if __name__ == "__main__":
                 it > 0 and validate_every > 0 and (it % validate_every) == 0
             ):
                 print("Running evaluation...")
-                eval_dict = dict()
                 images = val_vis_data["images"].to(device)
-                print(torch.max(images), torch.min(images))
-                masked_ids = torch.randint(24, size=(masked_cnt,))
-                mask = rearrange(
-                    torch.zeros_like(images),
-                    "b (v c) h w -> b v c h w",
-                    v=view_cnt,
-                    c=in_chann,
-                )
-                mask[:, masked_ids, :, :, :] = 1
-                mask = rearrange(mask, "b v c h w -> b (v c) h w")
-                y_t, ret_arr = model.generate(images, mask)
 
-                generated_images = rearrange(
-                    ret_arr, "b (v c) h w -> (v b) c h w", v=view_cnt, c=in_chann
-                )
-
-                for i, generated_image in enumerate(generated_images):
-                    eval_dict[f"generated_images_{i}"] = wandb.Image(
-                        make_grid(
-                            generated_images,
-                            nrow=generated_images.shape[0] // view_cnt,
-                        )
+                y_t, generated_batch = model.generate(images, masked_cnt)
+                log_dict["input_batch"] = wandb.Image(
+                    make_grid(
+                        rearrange(images, "b v c h w -> (v b) c h w"),
+                        nrow=images.shape[0],
                     )
+                )
 
-                if args.wandb:
-                    wandb.log(eval_dict, step=it)
+                for i, generated_images in enumerate(generated_batch):
+                    grid_images = rearrange(
+                        generated_images, "s v c h w -> (v s) c h w"
+                    )
+                    log_dict[f"generated_images_{i}"] = wandb.Image(
+                        make_grid(grid_images, nrow=generated_images.shape[0])
+                    )
 
             new_lr = lr_scheduler.get_cur_lr(it)
             for param_group in optimizer.param_groups:
@@ -241,13 +232,12 @@ if __name__ == "__main__":
             time_elapsed += time.perf_counter() - t0
 
             if log_every > 0 and it % log_every == 0:
-                log_dict = dict()
                 log_dict["t"] = time_elapsed
                 log_dict["lr"] = new_lr
                 log_dict["loss"] = loss.item()
 
-                if args.wandb:
-                    wandb.log(log_dict, step=it)
+            if args.wandb and log_dict:
+                wandb.log(log_dict, step=it)
 
             if it > max_it:
                 if rank == 0:

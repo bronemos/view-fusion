@@ -36,7 +36,7 @@ def create_webdataset(path, mode, start_shard=0, end_shard=12):
         images = [sample[f"{i:04d}.png"] for i in range(24)]
         images = np.stack(images, 0)  # .astype(np.float32)
 
-        images = 2 * rearrange(images, "v h w c -> (v c) h w") - 1
+        images = rearrange(images, "v h w c -> v c h w")  # 2 * ... -1
 
         result = {
             "images": images,

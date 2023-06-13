@@ -3,6 +3,7 @@ import torch
 import numpy as np
 
 from inspect import isfunction
+from einops import rearrange
 from functools import partial
 from tqdm import tqdm
 from torch import nn
@@ -101,7 +102,13 @@ class PaletteViewSynthesis(nn.Module):
         return model_mean + noise * (0.5 * model_log_variance).exp()
 
     @torch.no_grad()
-    def generate(self, y_0, mask=None, sample_num=8):
+    def generate(self, images, masked_cnt, sample_num=8):
+        masked_ids = torch.randint(24, size=(masked_cnt,))
+        mask = torch.zeros_like(images)
+        mask[:, masked_ids, :, :, :] = 1
+        mask = rearrange(mask, "b v c h w -> b (v c) h w")
+        y_0 = rearrange(images, "b v c h w -> b (v c) h w")
+
         b, *_ = y_0.shape
 
         assert (
@@ -110,6 +117,7 @@ class PaletteViewSynthesis(nn.Module):
         sample_inter = self.num_timesteps // sample_num
 
         y_t = torch.randn_like(y_0)
+        y_t = (y_t - torch.min(y_t)) / (torch.max(y_t) - torch.min(y_t))
         ret_arr = y_t
         for i in tqdm(
             reversed(range(0, self.num_timesteps)),
@@ -118,14 +126,26 @@ class PaletteViewSynthesis(nn.Module):
         ):
             t = torch.full((b,), i, device=y_0.device, dtype=torch.long)
             y_t = self.p_sample(y_t, t)
+            y_t = (y_t - torch.min(y_t)) / (torch.max(y_t) - torch.min(y_t))
             if mask is not None:
                 y_t = y_0 * (1.0 - mask) + mask * y_t
             if i % sample_inter == 0:
                 ret_arr = torch.cat([ret_arr, y_t], dim=0)
+
+        ret_arr = rearrange(
+            ret_arr,
+            "(s b) (v c) h w -> b s v c h w",
+            b=images.shape[0],
+            s=sample_num + 1,
+            v=images.shape[1],
+            c=images.shape[2],
+        )
         return y_t, ret_arr
 
     def forward(self, y_0, mask=None, noise=None):
         # sampling from p(gammas)
+        y_0 = rearrange(y_0, "b v c h w -> b (v c) h w")
+
         b, *_ = y_0.shape
         t = torch.randint(1, self.num_timesteps, (b,), device=y_0.device).long()
         gamma_t1 = extract(self.gammas, t - 1, x_shape=(1, 1))
