@@ -1,5 +1,5 @@
 model:
-  base_learning_rate: 1.0e-06
+  base_learning_rate: 5.0e-05
   validate_every: 10000
   log_every: 10
   palette_params:

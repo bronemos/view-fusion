@@ -9,4 +9,4 @@ module purge
 module -q load anaconda3
 source activate "/scratch/work/spieglb1/.conda_envs/ldm"
 
-python main.py -c /scratch/work/spieglb1/palette-view-synthesis/configs/test_config_2.yaml -gpus 0, -t 1 --wandb
+python main.py -c /scratch/work/spieglb1/palette-view-synthesis/configs/train_config.yaml -gpus 0, -t --wandb

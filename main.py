@@ -15,6 +15,7 @@ from einops import rearrange
 
 from utils.trainer import Trainer
 from utils.checkpoint import Checkpoint
+from utils.metrics import inception_score
 from utils.dist import init_ddp, worker_init_fn
 from data.dataset import NMRShardedDataset, create_webdataset
 from models.palette import PaletteViewSynthesis
@@ -57,6 +58,7 @@ if __name__ == "__main__":
 
     max_it = config["model"].get("max_it", 1000000)
     validate_every = config["model"].get("validate_every", 5000)
+    checkpoint_every = config["model"].get("checkpoint_every", 5000)
     log_every = config["model"].get("log_every", 10)
 
     exp_name = os.path.basename(os.path.dirname(args.config))
@@ -150,7 +152,7 @@ if __name__ == "__main__":
     except FileNotFoundError:
         load_dict = dict()
 
-    epoch_it = load_dict.get("epoch_it", -1)
+    epoch_no = load_dict.get("epoch_no", -1)
     it = load_dict.get("it", -1)
     time_elapsed = load_dict.get("t", 0.0)
     run_id = load_dict.get("run_id", None)
@@ -180,25 +182,51 @@ if __name__ == "__main__":
 
     model.set_new_noise_schedule(device=device, phase="train")
     model.set_loss(F.mse_loss)
+    metric_val_best = float("inf")
 
     masked_cnt = 3
-    view_cnt = 24
-    in_chann = 3
-    test_eval = True
+    test_eval = False
 
     while True:
+        epoch_no += 1
+        if train_sampler is not None:
+            train_sampler.set_epoch(epoch_no)
+
         for batch in train_loader:
             it += 1
             log_dict = dict()
 
             if rank == 0:
-                pass
+                checkpoint_dict = {
+                    "epoch_no": epoch_no,
+                    "it": it,
+                    "t": time_elapsed,
+                    "metric_val_best": metric_val_best,
+                    "run_id": run_id,
+                }
+
+                if (checkpoint_every > 0) and (it % checkpoint_every) == 0 and it > 0:
+                    checkpoint.save("model.pt", **checkpoint_dict)
 
             # Run validation
             if test_eval or (
                 it > 0 and validate_every > 0 and (it % validate_every) == 0
             ):
+                model.eval()
                 print("Running evaluation...")
+
+                losses = list()
+                for val_batch in val_loader:
+                    images = batch["images"].to(device)
+                    loss = model(images)
+                    losses.append(loss.item())
+
+                avg_loss = np.mean(losses)
+                log_dict["val_loss"] = avg_loss
+                if avg_loss < metric_val_best:
+                    metric_val_best = avg_loss
+
+                print("Running image generation...")
                 images = val_vis_data["images"].to(device)
 
                 y_t, generated_batch = model.generate(images, masked_cnt)
@@ -240,6 +268,9 @@ if __name__ == "__main__":
                 wandb.log(log_dict, step=it)
 
             if it > max_it:
+                print("Maximum iteration count reached.")
                 if rank == 0:
-                    pass
+                    checkpoint.save(
+                        "model.pt",
+                    )
                 exit(0)
