@@ -2,6 +2,7 @@ import argparse
 import os
 import yaml
 import time
+import datetime
 
 import numpy as np
 
@@ -51,8 +52,13 @@ if __name__ == "__main__":
     with open(args.config, "r") as f:
         config = yaml.load(f, Loader=yaml.CLoader)
 
-    rank, world_size = init_ddp()
-    device = torch.device(f"cuda:{rank}")
+    if args.gpu_ids is not None:
+        rank, world_size = init_ddp()
+        device = torch.device(f"cuda:{rank}")
+    else:
+        world_size = 0
+        rank = 0
+        device = torch.device("cpu")
 
     args.wandb = args.wandb and rank == 0
 
@@ -63,9 +69,15 @@ if __name__ == "__main__":
 
     exp_name = os.path.basename(os.path.dirname(args.config))
 
-    out_dir = os.path.dirname(args.config)
+    log_dir = "./logs"
+    now = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
 
-    batch_size = config["data"]["params"]["batch_size"] // world_size
+    out_dir = os.path.join(log_dir, "-".join((now, exp_name)))
+
+    if world_size > 0:
+        batch_size = config["data"]["params"]["batch_size"] // world_size
+    else:
+        batch_size = config["data"]["params"]["batch_size"]
 
     # Initialize datasets
     print("Loading training set...")
@@ -184,7 +196,7 @@ if __name__ == "__main__":
     model.set_loss(F.mse_loss)
     metric_val_best = float("inf")
 
-    masked_cnt = 3
+    masked_cnt = config["model"].get("masked_cnt", 6)
     test_eval = False
 
     while True:
@@ -252,6 +264,7 @@ if __name__ == "__main__":
             t0 = time.perf_counter()
 
             images = batch["images"].to(device)
+            print(torch.min(images), torch.max(images))
             model.train()
             optimizer.zero_grad()
             loss = model(images)

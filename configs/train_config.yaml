@@ -2,6 +2,7 @@ model:
   base_learning_rate: 5.0e-05
   validate_every: 10000
   log_every: 10
+  masked_cnt: 6
   palette_params:
     beta_schedule:
       train:

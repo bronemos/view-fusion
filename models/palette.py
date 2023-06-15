@@ -117,20 +117,21 @@ class PaletteViewSynthesis(nn.Module):
         sample_inter = self.num_timesteps // sample_num
 
         y_t = torch.randn_like(y_0)
-        y_t = (y_t - torch.min(y_t)) / (torch.max(y_t) - torch.min(y_t))
-        ret_arr = y_t
+        y_scaled = (y_t - torch.min(y_t)) / (torch.max(y_t) - torch.min(y_t))
+        ret_arr = y_scaled
         for i in tqdm(
             reversed(range(0, self.num_timesteps)),
             desc="sampling loop time step",
             total=self.num_timesteps,
         ):
             t = torch.full((b,), i, device=y_0.device, dtype=torch.long)
-            y_t = self.p_sample(y_t, t)
-            y_t = (y_t - torch.min(y_t)) / (torch.max(y_t) - torch.min(y_t))
+            y_t_unk = self.p_sample(y_t, t)
+            y_t_known = self.q_posterior(y_0, y_t, t)
             if mask is not None:
-                y_t = y_0 * (1.0 - mask) + mask * y_t
+                y_t = y_t_known * (1.0 - mask) + mask * y_t_unk
             if i % sample_inter == 0:
-                ret_arr = torch.cat([ret_arr, y_t], dim=0)
+                y_scaled = (y_t - torch.min(y_t)) / (torch.max(y_t) - torch.min(y_t))
+                ret_arr = torch.cat([ret_arr, y_scaled], dim=0)
 
         ret_arr = rearrange(
             ret_arr,

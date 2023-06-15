@@ -14,7 +14,7 @@ class Checkpoint:
         kwargs: PyTorch modules whose state should be checkpointed
     """
 
-    def __init__(self, checkpoint_dir="./chkpts", device=None, **kwargs):
+    def __init__(self, checkpoint_dir="./logs", device=None, **kwargs):
         self.module_dict = kwargs
         self.device = device
         self.checkpoint_dir = checkpoint_dir
