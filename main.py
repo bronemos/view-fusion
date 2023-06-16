@@ -227,16 +227,17 @@ if __name__ == "__main__":
                 model.eval()
                 print("Running evaluation...")
 
-                losses = list()
-                for val_batch in val_loader:
-                    images = batch["images"].to(device)
-                    loss = model(images)
-                    losses.append(loss.item())
+                if not test_eval:
+                    losses = list()
+                    for val_batch in val_loader:
+                        images = batch["images"].to(device)
+                        loss = model(images)
+                        losses.append(loss.item())
 
-                avg_loss = np.mean(losses)
-                log_dict["val_loss"] = avg_loss
-                if avg_loss < metric_val_best:
-                    metric_val_best = avg_loss
+                    avg_loss = np.mean(losses)
+                    log_dict["val_loss"] = avg_loss
+                    if avg_loss < metric_val_best:
+                        metric_val_best = avg_loss
 
                 print("Running image generation...")
                 images = val_vis_data["images"].to(device)
@@ -264,7 +265,6 @@ if __name__ == "__main__":
             t0 = time.perf_counter()
 
             images = batch["images"].to(device)
-            print(torch.min(images), torch.max(images))
             model.train()
             optimizer.zero_grad()
             loss = model(images)

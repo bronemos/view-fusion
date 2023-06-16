@@ -17,7 +17,6 @@ class PaletteViewSynthesis(nn.Module):
 
         self.unet = UNet(**unet)
         self.beta_schedule = beta_schedule
-        self.pred_cnt = 3
 
     def set_loss(self, loss_fn):
         self.loss_fn = loss_fn
@@ -102,6 +101,12 @@ class PaletteViewSynthesis(nn.Module):
         return model_mean + noise * (0.5 * model_log_variance).exp()
 
     @torch.no_grad()
+    def q_posterior_sample(self, y_0, y_t, t):
+        model_mean, model_log_variance = self.q_posterior(y_0, y_t, t)
+        noise = torch.randn_like(y_t) if any(t > 0) else torch.zeros_like(y_t)
+        return model_mean + noise * (0.5 * model_log_variance).exp()
+
+    @torch.no_grad()
     def generate(self, images, masked_cnt, sample_num=8):
         masked_ids = torch.randint(24, size=(masked_cnt,))
         mask = torch.zeros_like(images)
@@ -126,7 +131,7 @@ class PaletteViewSynthesis(nn.Module):
         ):
             t = torch.full((b,), i, device=y_0.device, dtype=torch.long)
             y_t_unk = self.p_sample(y_t, t)
-            y_t_known = self.q_posterior(y_0, y_t, t)
+            y_t_known = self.q_posterior_sample(y_0, y_t, t)
             if mask is not None:
                 y_t = y_t_known * (1.0 - mask) + mask * y_t_unk
             if i % sample_inter == 0:
