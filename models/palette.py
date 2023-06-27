@@ -10,6 +10,8 @@ from torch import nn
 from models.openai_unet.unet import UNetModel
 from models.unet import UNet
 
+from cleanfid import fid
+
 
 class PaletteViewSynthesis(nn.Module):
     def __init__(self, unet, beta_schedule, **kwargs):
@@ -107,8 +109,11 @@ class PaletteViewSynthesis(nn.Module):
         return model_mean + noise * (0.5 * model_log_variance).exp()
 
     @torch.no_grad()
-    def generate(self, images, masked_cnt, sample_num=8):
-        masked_ids = torch.randint(24, size=(masked_cnt,))
+    def generate(self, images, masked_cnt=6, sample_num=8, single=True):
+        if single:
+            masked_ids = 1
+        else:
+            masked_ids = torch.randperm(24)[:masked_cnt]
         mask = torch.zeros_like(images)
         mask[:, masked_ids, :, :, :] = 1
         mask = rearrange(mask, "b v c h w -> b (v c) h w")
@@ -122,7 +127,7 @@ class PaletteViewSynthesis(nn.Module):
         sample_inter = self.num_timesteps // sample_num
 
         y_t = torch.randn_like(y_0)
-        y_scaled = (y_t - torch.min(y_t)) / (torch.max(y_t) - torch.min(y_t))
+        y_scaled = torch.clip(y_t, 0, 1)
         ret_arr = y_scaled
         for i in tqdm(
             reversed(range(0, self.num_timesteps)),
@@ -135,7 +140,7 @@ class PaletteViewSynthesis(nn.Module):
             if mask is not None:
                 y_t = y_t_known * (1.0 - mask) + mask * y_t_unk
             if i % sample_inter == 0:
-                y_scaled = (y_t - torch.min(y_t)) / (torch.max(y_t) - torch.min(y_t))
+                y_scaled = torch.clip(y_t, 0, 1)
                 ret_arr = torch.cat([ret_arr, y_scaled], dim=0)
 
         ret_arr = rearrange(
@@ -146,7 +151,9 @@ class PaletteViewSynthesis(nn.Module):
             v=images.shape[1],
             c=images.shape[2],
         )
-        return y_t, ret_arr
+        generated_samples = ret_arr[:, -1, masked_ids, ...]
+        ground_truth = images[:, masked_ids, ...]
+        return y_t, ret_arr, generated_samples, ground_truth
 
     def forward(self, y_0, mask=None, noise=None):
         # sampling from p(gammas)

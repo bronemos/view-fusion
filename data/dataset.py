@@ -31,8 +31,26 @@ def transform_points(points, transform, translate=True):
     return points[..., :3]
 
 
-def create_webdataset(path, mode, start_shard=0, end_shard=12):
-    def process_sample(sample):
+def create_webdataset(path, mode, start_shard=0, end_shard=12, single=False):
+    def process_sample(sample, single=False):
+        if single:
+            images_idx = np.sort(np.random.choice(range(24), 2, replace=False))
+            images = [sample[f"{i:04d}.png"] for i in images_idx]
+            images = np.stack(images, 0)  # .astype(np.float32)
+            angle = 2 * np.pi / 24 * (images_idx[1] - images_idx[0])
+            sin_angle = np.full_like(images[0, ...], np.sin(angle))[None, ...]
+            cos_angle = np.full_like(images[0, ...], np.cos(angle))[None, ...]
+            images = np.concatenate((images, sin_angle, cos_angle), axis=0)
+
+            images = rearrange(images, "v h w c -> v c h w")  # 2 * ... -1
+
+            result = {
+                "images": images,
+                "scene_hash": sample["__key__"],
+            }
+
+            return result
+
         images = [sample[f"{i:04d}.png"] for i in range(24)]
         images = np.stack(images, 0)  # .astype(np.float32)
 
@@ -46,32 +64,26 @@ def create_webdataset(path, mode, start_shard=0, end_shard=12):
         return result
 
     if start_shard == end_shard:
-        return (
-            wds.WebDataset(
-                os.path.join(
-                    path,
-                    f"NMR-{mode}-{start_shard:02d}.tar",
-                ),
-                shardshuffle=True,
-            )
-            .shuffle(100)
-            .decode("rgb")
-            .map(process_sample)
+        webdataset = wds.WebDataset(
+            os.path.join(
+                path,
+                f"NMR-{mode}-{start_shard:02d}.tar",
+            ),
+            shardshuffle=True,
         )
 
     else:
-        return (
-            wds.WebDataset(
-                os.path.join(
-                    path,
-                    f"NMR-{mode}-{{{start_shard:02d}..{end_shard:02d}}}.tar",
-                ),
-                shardshuffle=True,
-            )
-            .shuffle(100)
-            .decode("rgb")
-            .map(process_sample)
+        webdataset = wds.WebDataset(
+            os.path.join(
+                path,
+                f"NMR-{mode}-{{{start_shard:02d}..{end_shard:02d}}}.tar",
+            ),
+            shardshuffle=True,
         )
+
+    return (
+        webdataset.shuffle(100).decode("rgb").map(lambda x: process_sample(x, single))
+    )
 
 
 class NMRShardedDataset(Dataset):
