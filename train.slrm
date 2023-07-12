@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --time=10:00:00
+#SBATCH --time=96:00:00
 #SBATCH --cpus-per-task=12
 #SBATCH --mem=128G
 #SBATCH --gres=gpu:v100:1
@@ -9,4 +9,4 @@ module purge
 module -q load anaconda3
 source activate "/scratch/work/spieglb1/.conda_envs/ldm"
 
-python main.py -c /scratch/work/spieglb1/palette-view-synthesis/configs/one-view.yaml -gpus 0, -t --wandb
+python main.py -c /scratch/work/spieglb1/palette-view-synthesis/configs/one-view-all-classes-dit.yaml -gpus 0, -t --wandb

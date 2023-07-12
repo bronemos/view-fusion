@@ -15,7 +15,7 @@ model:
         num_timesteps: 1000
         linear_start: 1.0e-04
         linear_end: 0.09
-  unet_params:
+  denoise_net_params:
     image_size: 64
     in_channel: 72
     out_channel: 72

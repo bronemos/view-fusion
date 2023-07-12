@@ -2,6 +2,7 @@
 
 import os
 import torch
+import yaml
 
 
 class Checkpoint:
@@ -14,12 +15,15 @@ class Checkpoint:
         kwargs: PyTorch modules whose state should be checkpointed
     """
 
-    def __init__(self, checkpoint_dir="./logs", device=None, **kwargs):
+    def __init__(self, checkpoint_dir="./logs", device=None, config=None, **kwargs):
         self.module_dict = kwargs
         self.device = device
         self.checkpoint_dir = checkpoint_dir
         if not os.path.exists(checkpoint_dir):
             os.makedirs(checkpoint_dir)
+            config_path = os.path.join(checkpoint_dir, f"config.yaml")
+            with open(config_path, "w") as f:
+                yaml.dump(config, f, default_flow_style=False)
 
     def save(self, filename, **kwargs):
         """Saves the current module states

@@ -20,6 +20,10 @@ def init_ddp():
         local_rank = int(os.environ["LOCAL_RANK"])
         world_size = int(os.environ["WORLD_SIZE"])
     except KeyError:
+        # TODO fix cpu ddp
+        os.environ["MASTER_ADDR"] = "127.0.0.1"
+        os.environ["MASTER_PORT"] = "29500"
+        dist.init_process_group("gloo", rank=0, world_size=1)
         return 0, 1  # Single GPU run
 
     dist.init_process_group(backend="nccl")

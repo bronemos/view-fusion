@@ -1,7 +1,8 @@
 model:
   base_learning_rate: 5.0e-05
+  denoise_net: dit
+  dit_name: DiT-L/4
   validate_every: 10000
-  denoise_net: unet
   log_every: 10
   masked_cnt: 6
   single_view: True
@@ -21,14 +22,6 @@ model:
     image_size: 64
     in_channel: 8
     out_channel: 3
-    inner_channel: 64
-    res_blocks: 3
-    attn_res: [16]
-    channel_mults:
-    - 1
-    - 2
-    - 3
-    - 5
 data:
   target: main.DataModuleFromConfig
   params:
@@ -39,7 +32,7 @@ data:
       target: ldm.data.nmr_sharded.NMRShardedDataset
       params:
         start_shard: 1
-        end_shard: 1
+        end_shard: 12
         path: /scratch/work/spieglb1/datasets/NMR_sharded
         mode: train
 
@@ -47,7 +40,7 @@ data:
       target: ldm.data.nmr_sharded.NMRShardedDataset
       params:
         start_shard: 1
-        end_shard: 1
+        end_shard: 12
         path: /scratch/work/spieglb1/datasets/NMR_sharded
         mode: test
 
@@ -55,6 +48,6 @@ data:
       target: ldm.data.nmr_sharded.NMRShardedDataset
       params:
         start_shard: 1
-        end_shard: 1
+        end_shard: 12
         path: /scratch/work/spieglb1/datasets/NMR_sharded
         mode: val

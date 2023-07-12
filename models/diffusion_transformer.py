@@ -181,9 +181,10 @@ class DiT(nn.Module):
 
     def __init__(
         self,
-        input_size=32,
+        image_size=64,
         patch_size=2,
-        in_channels=4,
+        in_channel=4,
+        out_channel=4,
         hidden_size=1152,
         depth=28,
         num_heads=16,
@@ -194,13 +195,14 @@ class DiT(nn.Module):
     ):
         super().__init__()
         self.learn_sigma = learn_sigma
-        self.in_channels = in_channels
-        self.out_channels = in_channels * 2 if learn_sigma else in_channels
+        self.in_channels = in_channel
+        # self.out_channels = in_channels * 2 if learn_sigma else in_channels
+        self.out_channels = out_channel
         self.patch_size = patch_size
         self.num_heads = num_heads
 
         self.x_embedder = PatchEmbed(
-            input_size, patch_size, in_channels, hidden_size, bias=True
+            image_size, patch_size, in_channel, hidden_size, bias=True
         )
         self.t_embedder = TimestepEmbedder(hidden_size)
         self.y_embedder = LabelEmbedder(num_classes, hidden_size, class_dropout_prob)
@@ -273,7 +275,7 @@ class DiT(nn.Module):
         imgs = x.reshape(shape=(x.shape[0], c, h * p, h * p))
         return imgs
 
-    def forward(self, x, t, y):
+    def forward(self, x, t, y=None):
         """
         Forward pass of DiT.
         x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
@@ -284,8 +286,11 @@ class DiT(nn.Module):
             self.x_embedder(x) + self.pos_embed
         )  # (N, T, D), where T = H * W / patch_size ** 2
         t = self.t_embedder(t)  # (N, D)
-        y = self.y_embedder(y, self.training)  # (N, D)
-        c = t + y  # (N, D)
+        if y is not None:
+            y = self.y_embedder(y, self.training)  # (N, D)
+            c = t + y  # (N, D)
+        else:
+            c = t.squeeze()
         for block in self.blocks:
             x = block(x, c)  # (N, T, D)
         x = self.final_layer(x, c)  # (N, T, patch_size ** 2 * out_channels)

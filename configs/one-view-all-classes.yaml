@@ -39,7 +39,7 @@ data:
       target: ldm.data.nmr_sharded.NMRShardedDataset
       params:
         start_shard: 1
-        end_shard: 1
+        end_shard: 12
         path: /scratch/work/spieglb1/datasets/NMR_sharded
         mode: train
 
@@ -47,7 +47,7 @@ data:
       target: ldm.data.nmr_sharded.NMRShardedDataset
       params:
         start_shard: 1
-        end_shard: 1
+        end_shard: 12
         path: /scratch/work/spieglb1/datasets/NMR_sharded
         mode: test
 
@@ -55,6 +55,6 @@ data:
       target: ldm.data.nmr_sharded.NMRShardedDataset
       params:
         start_shard: 1
-        end_shard: 1
+        end_shard: 12
         path: /scratch/work/spieglb1/datasets/NMR_sharded
         mode: val

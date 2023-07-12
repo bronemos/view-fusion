@@ -8,17 +8,16 @@ from functools import partial
 from tqdm import tqdm
 from torch import nn
 from models.openai_unet.unet import UNetModel
-from models.diffusion_transformer import DiT_models
 from models.unet import UNet
 
 from cleanfid import fid
 
 
 class PaletteViewSynthesis(nn.Module):
-    def __init__(self, denoise_fn, beta_schedule, single_view, dit_name=None, **kwargs):
+    def __init__(self, unet, beta_schedule, single_view, **kwargs):
         super(PaletteViewSynthesis, self).__init__(**kwargs)
 
-        self.denoise_fn = denoise_fn
+        self.denoise_fn = UNet(**unet)
         self.beta_schedule = beta_schedule
         self.single_view = single_view
 
@@ -76,12 +75,12 @@ class PaletteViewSynthesis(nn.Module):
         )
         return posterior_mean, posterior_log_variance_clipped
 
-    def p_mean_variance(self, y_t, t, clip_denoised: bool, y_cond=None):
+    def p_mean_variance(self, y_t, t, clip_denoised: bool):
         noise_level = extract(self.gammas, t, x_shape=(1, 1)).to(y_t.device)
         y_0_hat = self.predict_start_from_noise(
             y_t,
             t=t,
-            noise=self.denoise_fn(torch.cat([y_cond, y_t], dim=1), noise_level),
+            noise=self.denoise_fn(y_t, noise_level),
         )
 
         if clip_denoised:
@@ -97,44 +96,65 @@ class PaletteViewSynthesis(nn.Module):
         return sample_gammas.sqrt() * y_0 + (1 - sample_gammas).sqrt() * noise
 
     @torch.no_grad()
-    def p_sample(self, y_t, t, clip_denoised=True, y_cond=None):
+    def p_sample(self, y_t, t, clip_denoised=False):
         model_mean, model_log_variance = self.p_mean_variance(
-            y_t=y_t, t=t, clip_denoised=clip_denoised, y_cond=y_cond
+            y_t=y_t, t=t, clip_denoised=clip_denoised
         )
         noise = torch.randn_like(y_t) if any(t > 0) else torch.zeros_like(y_t)
         return model_mean + noise * (0.5 * model_log_variance).exp()
 
     @torch.no_grad()
-    def generate(self, y_cond, y_t=None, y_0=None, mask=None, sample_num=8):
-        b, *_ = y_cond.shape
+    def q_posterior_sample(self, y_0, y_t, t):
+        model_mean, model_log_variance = self.q_posterior(y_0, y_t, t)
+        noise = torch.randn_like(y_t) if any(t > 0) else torch.zeros_like(y_t)
+        return model_mean + noise * (0.5 * model_log_variance).exp()
+
+    @torch.no_grad()
+    def generate(self, images, masked_cnt=6, sample_num=8):
+        if self.single_view:
+            masked_ids = 1
+        else:
+            masked_ids = torch.randperm(24)[:masked_cnt]
+        mask = torch.zeros_like(images)
+        mask[:, masked_ids, :, :, :] = 1
+        mask = rearrange(mask, "b v c h w -> b (v c) h w")
+        y_0 = rearrange(images, "b v c h w -> b (v c) h w")
+
+        b, *_ = y_0.shape
 
         assert (
             self.num_timesteps > sample_num
         ), "num_timesteps must greater than sample_num"
         sample_inter = self.num_timesteps // sample_num
 
-        y_t = default(y_t, lambda: torch.randn_like(y_cond[:, :3, ...]))
-        ret_arr = y_t
+        y_t = torch.randn_like(y_0)
+        y_scaled = torch.clip(y_t, 0, 1)
+        ret_arr = y_scaled
         for i in tqdm(
             reversed(range(0, self.num_timesteps)),
             desc="sampling loop time step",
             total=self.num_timesteps,
         ):
-            t = torch.full((b,), i, device=y_cond.device, dtype=torch.long)
-            y_t = self.p_sample(y_t, t, y_cond=y_cond)
+            t = torch.full((b,), i, device=y_0.device, dtype=torch.long)
+            y_t_unk = self.p_sample(y_t, t)
+            y_t_known = self.q_posterior_sample(y_0, y_t, t)
             if mask is not None:
-                y_t = y_0 * (1.0 - mask) + mask * y_t
+                y_t = y_t_known * (1.0 - mask) + mask * y_t_unk
             if i % sample_inter == 0:
-                ret_arr = torch.cat([ret_arr, y_t], dim=0)
+                y_scaled = torch.clip(y_t, 0, 1)
+                ret_arr = torch.cat([ret_arr, y_scaled], dim=0)
 
         ret_arr = rearrange(
             ret_arr,
-            "(s b) c h w -> b s c h w",
-            b=b,
+            "(s b) (v c) h w -> b s v c h w",
+            b=images.shape[0],
+            s=sample_num + 1,
+            v=images.shape[1],
+            c=images.shape[2],
         )
-        generated_samples = torch.unsqueeze(ret_arr[:, -1, ...], 1)
-
-        return y_t, ret_arr, generated_samples
+        generated_samples = ret_arr[:, -1, masked_ids, ...]
+        ground_truth = images[:, masked_ids, ...]
+        return y_t, ret_arr, generated_samples, ground_truth
 
     def forward(self, y_0, y_cond=None, mask=None, noise=None):
         # sampling from p(gammas)
@@ -154,6 +174,38 @@ class PaletteViewSynthesis(nn.Module):
 
         noise_hat = self.denoise_fn(torch.cat([y_cond, y_noisy], dim=1), sample_gammas)
         loss = self.loss_fn(noise, noise_hat)
+
+        return loss
+
+    def forward_old(self, views, cond=None, noise=None):
+        # sampling from p(gammas)
+        y_0 = rearrange(views, "b v c h w -> b (v c) h w")
+        if cond is not None:
+            y_0 = torch.concatenate((y_0, cond), axis=1)
+
+        b, *_ = y_0.shape
+        t = torch.randint(1, self.num_timesteps, (b,), device=y_0.device).long()
+        gamma_t1 = extract(self.gammas, t - 1, x_shape=(1, 1))
+        sqrt_gamma_t2 = extract(self.gammas, t, x_shape=(1, 1))
+        sample_gammas = (sqrt_gamma_t2 - gamma_t1) * torch.rand(
+            (b, 1), device=y_0.device
+        ) + gamma_t1
+        sample_gammas = sample_gammas.view(b, -1)
+
+        noise = default(noise, lambda: torch.randn_like(y_0))
+        y_noisy = self.q_sample(
+            y_0=y_0, sample_gammas=sample_gammas.view(-1, 1, 1, 1), noise=noise
+        )
+        if not self.single_view:
+            noise_hat = self.denoise_fn(y_noisy, sample_gammas)
+            loss = self.loss_fn(noise, noise_hat)
+        else:
+            mask = torch.zeros_like(y_noisy)
+            mask[:, 3:7, :, :] = 1.0
+            noise_hat = self.denoise_fn(
+                y_noisy * mask + (1.0 - mask) * y_0, sample_gammas
+            )
+            loss = self.loss(noise, noise_hat)
 
         return loss
 

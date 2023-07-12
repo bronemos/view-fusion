@@ -4,9 +4,8 @@ import yaml
 import time
 import datetime
 
-from pathlib import Path
-
 import numpy as np
+
 import torch
 import torch.optim as optim
 import torch.multiprocessing as mp
@@ -16,13 +15,12 @@ from torchvision.utils import make_grid, save_image
 from einops import rearrange
 from cleanfid import fid
 
+from utils.trainer import Trainer
 from utils.checkpoint import Checkpoint
 from utils.metrics import inception_score
 from utils.dist import init_ddp, worker_init_fn
-from data.dataset import create_webdataset
+from data.dataset import NMRShardedDataset, create_webdataset
 from models.palette import PaletteViewSynthesis
-from models.unet import UNet
-from models.diffusion_transformer import DiT_models
 
 
 class LrScheduler:
@@ -47,50 +45,46 @@ if __name__ == "__main__":
     parser.add_argument("-gpus", "--gpu_ids", type=str, default=None)
     parser.add_argument("-t", "--train", action="store_true", default=True)
     parser.add_argument("-i", "--inference", action="store_true", default=False)
-    parser.add_argument("-r", "--resume", action="store_true", default=False)
     parser.add_argument("-s", "--src_dir", type=str, default=None)
     parser.add_argument(
         "--wandb", action="store_true", help="Log run to Weights and Biases."
     )
     args = parser.parse_args()
 
-    log_dir = "./logs"
+    with open(args.config, "r") as f:
+        config = yaml.load(f, Loader=yaml.CLoader)
 
-    if args.inference or args.resume:
-        if args.src_dir is None:
-            raise ValueError("Source directory (-s, --src_dir) must be provided.")
-        out_dir = Path(args.src_dir)
-        tmp_name = os.path.basename(args.src_dir)
-        with open(os.path.join(args.src_dir, "config.yaml")) as f:
-            config = yaml.load(f, Loader=yaml.CLoader)
-
-    else:
-        exp_name = os.path.splitext(os.path.basename(args.config))[0]
-        now = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
-        out_dir = os.path.join(log_dir, "-".join((now, exp_name)))
-        tmp_name = "-".join((now, exp_name))
-        with open(args.config, "r") as f:
-            config = yaml.load(f, Loader=yaml.CLoader)
+    if args.inference and (args.src_dir is None):
+        raise ValueError(
+            "Source directory (-s, --src_dir) must be provided for inference."
+        )
 
     if args.gpu_ids is not None:
         rank, world_size = init_ddp()
         device = torch.device(f"cuda:{rank}")
     else:
-        rank, world_size = init_ddp()
+        world_size = 0
+        rank = 0
         device = torch.device("cpu")
 
     args.wandb = args.wandb and rank == 0
 
     max_it = config["model"].get("max_it", 1000000)
     validate_every = config["model"].get("validate_every", 5000)
-    checkpoint_every = config["model"].get("checkpoint_every", 10)
+    checkpoint_every = config["model"].get("checkpoint_every", 5000)
     log_every = config["model"].get("log_every", 10)
     masked_cnt = config["model"].get("masked_cnt", 6)
     single_view = config["model"].get("single_view", False)
 
-    tmp_dir = os.path.join("/tmp", tmp_name)
+    exp_name = os.path.splitext(os.path.basename(args.config))[0]
+
+    log_dir = "./logs"
+    now = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+
+    out_dir = os.path.join(log_dir, "-".join((now, exp_name)))
+    tmp_dir = os.path.join("/tmp", "-".join((now, exp_name)))
     print(tmp_dir)
-    # os.makedirs(tmp_dir)
+    os.makedirs(tmp_dir)
 
     if world_size > 0:
         batch_size = config["data"]["params"]["batch_size"] // world_size
@@ -101,14 +95,14 @@ if __name__ == "__main__":
     print("Loading training set...")
     # train_dataset = NMRShardedDataset(**config["data"]["params"]["train"]["params"])
     train_dataset = create_webdataset(
-        **config["data"]["params"]["train"]["params"], single_view=single_view
+        **config["data"]["params"]["train"]["params"], single=single_view
     )
     print("Training set loaded.")
 
     print("Loading validation set...")
     # val_dataset = NMRShardedDataset(**config["data"]["params"]["test"]["params"])
     val_dataset = create_webdataset(
-        **config["data"]["params"]["test"]["params"], single_view=single_view
+        **config["data"]["params"]["test"]["params"], single=single_view
     )
     print("Validation set loaded.")
 
@@ -159,27 +153,13 @@ if __name__ == "__main__":
 
     # Initialize model
 
-    denoise_net = config["model"].get("denoise_net", "unet")
-    if denoise_net == "unet":
-        denoise_fn = UNet(**config["model"]["denoise_net_params"])
-    elif denoise_net == "dit":
-        dit_name = config["model"].get("dit_name", "DiT-L/4")
-        denoise_fn = DiT_models[dit_name](**config["model"]["denoise_net_params"])
-    else:
-        raise ValueError("Provided denoising function is not supported!")
     model = PaletteViewSynthesis(
-        denoise_fn,
+        config["model"]["unet_params"],
         config["model"]["palette_params"]["beta_schedule"],
-        single_view=single_view,
     ).to(device)
-    model.set_new_noise_schedule(device=device, phase="train")
 
     if world_size > 1:
-        print("here")
         model = DistributedDataParallel(model, device_ids=[rank], output_device=rank)
-
-    if device == torch.device("cpu"):
-        model = DistributedDataParallel(model)
 
     peak_it = config.get("lr_warmup", 2500)
     decay_it = config.get("decay_it", 4000000)
@@ -188,15 +168,13 @@ if __name__ == "__main__":
         peak_lr=1e-4, peak_it=peak_it, decay_it=decay_it, decay_rate=0.16
     )
     optimizer = optim.Adam(model.parameters(), lr=lr_scheduler.get_cur_lr(0))
-    checkpoint = Checkpoint(
-        out_dir, device=device, config=config, model=model, optimizer=optimizer
-    )
+    checkpoint = Checkpoint(out_dir, device=device, model=model, optimizer=optimizer)
 
     # Try to resume training
 
     try:
-        if os.path.exists(os.path.join(out_dir, f"model.pt")):
-            load_dict = checkpoint.load(f"model.pt")
+        if os.path.exists(os.path.join(out_dir, f"model_{max_it}.pt")):
+            load_dict = checkpoint.load(f"model_{max_it}.pt")
         else:
             load_dict = checkpoint.load("model.pt")
     except FileNotFoundError:
@@ -218,59 +196,45 @@ if __name__ == "__main__":
         if run_id is None:
             run_id = wandb.util.generate_id()
             print(f"Sampled new wandb run_id {run_id}.")
-            wandb.init(
-                project="palette-view-synthesis",
-                name=f"{exp_name}-{run_id}",
-                id=run_id,
-                resume=True,
-                config=config,
-            )
         else:
             print(f"Resuming wandb with existing run_id {run_id}.")
-            wandb.init(
-                project="palette-view-synthesis",
-                id=run_id,
-                resume=True,
-                config=config,
-            )
+        wandb.init(
+            project="palette-view-synthesis",
+            name=f"{exp_name}-{run_id}",
+            id=run_id,
+            resume=True,
+            config=config,
+        )
 
     if args.inference:
         log_dict = dict()
         model.eval()
 
         print("Running image generation...")
-        images = val_vis_data["view"].to(device)
-        cond = val_vis_data["cond"].to(device)
+        images = val_vis_data["images"].to(device)
 
-        y_t, generated_batch, *_ = model.generate(cond)
-
-        output = torch.cat(
-            (
-                torch.clamp(generated_batch, 0, 1),
-                torch.unsqueeze(images, 1),
-                torch.unsqueeze(cond, 1)[:, :, :3, ...],
-            ),
-            dim=1,
-        )
-        log_dict["inference_output"] = wandb.Image(
+        y_t, generated_batch, _ = model.generate(images, masked_cnt, single=single_view)
+        log_dict["input_batch_inference"] = wandb.Image(
             make_grid(
-                rearrange(output, "b s c h w -> (b s) c h w"),
-                nrow=output.shape[1],
-                scale_each=True,
-            ),
-            caption="Denoising steps, Target, Input View",
+                rearrange(images, "b v c h w -> (v b) c h w"),
+                nrow=images.shape[0],
+            )
         )
-        wandb.log(log_dict)
 
+        for i, generated_images in enumerate(generated_batch):
+            grid_images = rearrange(generated_images, "s v c h w -> (v s) c h w")
+            log_dict[f"generated_images_inference_{i}"] = wandb.Image(
+                make_grid(grid_images, nrow=generated_images.shape[0])
+            )
         exit(0)
 
     # Training loop
     if args.train:
+        model.set_new_noise_schedule(device=device, phase="train")
         model.set_loss(F.mse_loss)
         metric_val_best = float("inf")
 
         test_eval = False
-        compute_fid = False
 
         while True:
             epoch_no += 1
@@ -310,18 +274,17 @@ if __name__ == "__main__":
                     model.eval()
                     print("Running evaluation...")
 
-                    if compute_fid:
+                    if test_eval:
                         losses = list()
                         generated_batches = list()
                         ground_truth_batches = list()
 
                         for val_batch in val_loader:
-                            images = batch["cond"].to(device)
-                            cond = batch["cond"].to(device)
+                            images = batch["images"].to(device)
                             with torch.no_grad():
-                                loss = model(images, y_cond=cond)
+                                loss = model(images)
                                 *_, generated_samples, ground_truth = model.generate(
-                                    cond
+                                    images, masked_cnt, single=single_view
                                 )
                                 generated_batches.append(generated_samples)
                                 ground_truth_batches.append(ground_truth)
@@ -355,27 +318,25 @@ if __name__ == "__main__":
                             checkpoint.save("model_best.pt")
 
                     print("Running image generation...")
-                    images = val_vis_data["view"].to(device)
-                    cond = val_vis_data["cond"].to(device)
+                    images = val_vis_data["images"].to(device)
 
-                    y_t, generated_batch, *_ = model.generate(cond)
-
-                    output = torch.cat(
-                        (
-                            torch.clamp(generated_batch, 0, 1),
-                            torch.unsqueeze(images, 1),
-                            torch.unsqueeze(cond, 1)[:, :, :3, ...],
-                        ),
-                        dim=1,
+                    y_t, generated_batch, _ = model.generate(
+                        images, masked_cnt, single=single_view
                     )
-                    log_dict["output"] = wandb.Image(
+                    log_dict["input_batch"] = wandb.Image(
                         make_grid(
-                            rearrange(output, "b s c h w -> (b s) c h w"),
-                            nrow=output.shape[1],
-                            scale_each=True,
-                        ),
-                        caption="Denoising steps, Target, Input View",
+                            rearrange(images, "b v c h w -> (v b) c h w"),
+                            nrow=images.shape[0],
+                        )
                     )
+
+                    for i, generated_images in enumerate(generated_batch):
+                        grid_images = rearrange(
+                            generated_images, "s v c h w -> (v s) c h w"
+                        )
+                        log_dict[f"generated_images_{i}"] = wandb.Image(
+                            make_grid(grid_images, nrow=generated_images.shape[0])
+                        )
 
                 new_lr = lr_scheduler.get_cur_lr(it)
                 for param_group in optimizer.param_groups:
@@ -383,14 +344,10 @@ if __name__ == "__main__":
 
                 t0 = time.perf_counter()
 
-                images = batch["view"].to(device)
-                if single_view:
-                    cond = batch["cond"].to(device)
-                else:
-                    cond = None
+                images = batch["images"].to(device)
                 model.train()
                 optimizer.zero_grad()
-                loss = model(images, y_cond=cond)
+                loss = model(images)
                 loss.backward()
                 optimizer.step()
                 time_elapsed += time.perf_counter() - t0

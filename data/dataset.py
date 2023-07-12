@@ -31,21 +31,26 @@ def transform_points(points, transform, translate=True):
     return points[..., :3]
 
 
-def create_webdataset(path, mode, start_shard=0, end_shard=12, single=False):
-    def process_sample(sample, single=False):
-        if single:
+def create_webdataset(path, mode, start_shard=0, end_shard=12, single_view=False):
+    def process_sample(sample, single_view=False):
+        if single_view:
             images_idx = np.sort(np.random.choice(range(24), 2, replace=False))
             images = [sample[f"{i:04d}.png"] for i in images_idx]
-            images = np.stack(images, 0)  # .astype(np.float32)
+            images = np.stack(images, 0).astype(np.float32)
             angle = 2 * np.pi / 24 * (images_idx[1] - images_idx[0])
-            sin_angle = np.full_like(images[0, ...], np.sin(angle))[None, ...]
-            cos_angle = np.full_like(images[0, ...], np.cos(angle))[None, ...]
-            images = np.concatenate((images, sin_angle, cos_angle), axis=0)
+            sin_angle = (np.full(images.shape[1:3], np.sin(angle)) + 1) / 2
+            cos_angle = (np.full(images.shape[1:3], np.cos(angle)) + 1) / 2
+
+            # images = np.concatenate((images, sin_angle, cos_angle), axis=0)
+            angles = np.stack((sin_angle, cos_angle), 0).astype(np.float32)
 
             images = rearrange(images, "v h w c -> v c h w")  # 2 * ... -1
 
+            cond = np.concatenate((images[1], angles), axis=0).astype(np.float32)
+
             result = {
-                "images": images,
+                "view": images[0],
+                "cond": cond,
                 "scene_hash": sample["__key__"],
             }
 
@@ -82,7 +87,9 @@ def create_webdataset(path, mode, start_shard=0, end_shard=12, single=False):
         )
 
     return (
-        webdataset.shuffle(100).decode("rgb").map(lambda x: process_sample(x, single))
+        webdataset.shuffle(100)
+        .decode("rgb")
+        .map(lambda x: process_sample(x, single_view))
     )
 
 
