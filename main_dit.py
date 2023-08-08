@@ -19,10 +19,10 @@ from cleanfid import fid
 from utils.checkpoint import Checkpoint
 from utils.metrics import inception_score
 from utils.dist import init_ddp, worker_init_fn
-from data.dataset import create_webdataset, create_webdataset_metzler
+from data.dataset import create_webdataset_dit
 from models.palette import PaletteViewSynthesis
 from models.unet import UNet
-from models.diffusion_transformer_old import DiT_models
+from models.diffusion_transformer import DiT_models
 
 
 class LrScheduler:
@@ -49,14 +49,12 @@ if __name__ == "__main__":
     parser.add_argument("-i", "--inference", action="store_true", default=False)
     parser.add_argument("-r", "--resume", action="store_true", default=False)
     parser.add_argument("-s", "--src_dir", type=str, default=None)
-    parser.add_argument("-m", "--metzler", action="store_true", default=False)
     parser.add_argument(
         "--wandb", action="store_true", help="Log run to Weights and Biases."
     )
     args = parser.parse_args()
 
     log_dir = "./logs"
-    is_metzler = args.metzler
 
     if args.inference or args.resume:
         if args.src_dir is None:
@@ -100,19 +98,13 @@ if __name__ == "__main__":
 
     # Initialize datasets
     print("Loading training set...")
-    # train_dataset = NMRShardedDataset(**config["data"]["params"]["train"]["params"])
-    if is_metzler:
-        train_dataset = create_webdataset_metzler("/scratch/work/spieglb1/datasets/")
-    else:
-        train_dataset = create_webdataset(**config["data"]["params"]["train"]["params"])
+
+    train_dataset = create_webdataset_dit(**config["data"]["params"]["train"]["params"])
     print("Training set loaded.")
 
     print("Loading validation set...")
-    # val_dataset = NMRShardedDataset(**config["data"]["params"]["test"]["params"])
-    if is_metzler:
-        val_dataset = create_webdataset_metzler("/scratch/work/spieglb1/datasets/")
-    else:
-        val_dataset = create_webdataset(**config["data"]["params"]["test"]["params"])
+
+    val_dataset = create_webdataset_dit(**config["data"]["params"]["test"]["params"])
     print("Validation set loaded.")
 
     # Initialize data loaders
@@ -280,138 +272,177 @@ if __name__ == "__main__":
                 train_sampler.set_epoch(epoch_no)
 
             for batch in train_loader:
-                it += 1
-                log_dict = dict()
+                input_images = batch["input_images"].to(device)
+                input_camera_pos = batch["input_camera_pos"].to(device)
+                input_rays = batch["input_rays"].to(device)
 
-                if rank == 0:
-                    checkpoint_dict = {
-                        "epoch_no": epoch_no,
-                        "it": it,
-                        "t": time_elapsed,
-                        "metric_val_best": metric_val_best,
-                        "run_id": run_id,
-                    }
+                target_images = batch["target_images"].to(device)
+                target_camera_pos = batch["target_camera_pos"].to(device)
+                target_rays = batch["target_rays"].to(device)
+                for i in range(target_images.shape[1]):
+                    it += 1
 
-                    if (
-                        (checkpoint_every > 0)
-                        and (it % checkpoint_every) == 0
-                        and it > 0
-                    ):
-                        checkpoint.save("model.pt", **checkpoint_dict)
-
-                # Run validation
-                if test_eval or (
-                    it > 0 and validate_every > 0 and (it % validate_every) == 0
-                ):
-                    images_path = os.path.join(tmp_dir, f"images-{it}")
-                    ground_truth_path = os.path.join(images_path, "ground-truth")
-                    generated_path = os.path.join(images_path, "generated")
-                    os.makedirs(images_path)
-                    os.makedirs(generated_path)
-                    os.makedirs(ground_truth_path)
-                    model.eval()
-                    print("Running evaluation...")
-
-                    if compute_fid:
-                        losses = list()
-                        generated_batches = list()
-                        ground_truth_batches = list()
-
-                        for val_batch in val_loader:
-                            images = batch["cond"].to(device)
-                            cond = batch["cond"].to(device)
-                            angle = batch["angle"].to(device)
-                            with torch.no_grad():
-                                loss = model(images, y_cond=cond)
-                                *_, generated_samples, ground_truth = model.generate(
-                                    cond, angle=angle
-                                )
-                                generated_batches.append(generated_samples)
-                                ground_truth_batches.append(ground_truth)
-
-                            losses.append(loss.item())
-
-                        cnt = 0
-                        for gt_batch, generated_batch in zip(
-                            ground_truth_batches, generated_batches
-                        ):
-                            for gt_sample, generated_sample in zip(
-                                gt_batch, generated_batch
-                            ):
-                                # print(gt_sample.shape, generated_sample.shape)
-                                save_image(
-                                    gt_sample,
-                                    os.path.join(ground_truth_path, f"{cnt}.png"),
-                                )
-                                save_image(
-                                    generated_sample,
-                                    os.path.join(generated_path, f"{cnt}.png"),
-                                )
-                                cnt += 1
-
-                        fid_score = fid.compute_fid(ground_truth_path, generated_path)
-                        log_dict["fid_score"] = fid_score
-                        avg_loss = np.mean(losses)
-                        log_dict["val_loss"] = avg_loss
-                        if avg_loss < metric_val_best:
-                            metric_val_best = avg_loss
-                            checkpoint.save("model_best.pt")
-
-                    print("Running image generation...")
-                    images = val_vis_data["view"].to(device)
-                    cond = val_vis_data["cond"].to(device)
-                    angle = val_vis_data["angle"].to(device)
-
-                    y_t, generated_batch, *_ = model.generate(cond, angle=angle)
-
-                    output = torch.cat(
-                        (
-                            torch.clamp(generated_batch, 0, 1),
-                            torch.unsqueeze(images, 1),
-                            rearrange(
-                                cond[:, :18, ...], "b (v c) h w -> b v c h w", c=3
-                            ),
-                        ),
-                        dim=1,
-                    )
-                    log_dict["output"] = wandb.Image(
-                        make_grid(
-                            rearrange(output, "b s c h w -> (b s) c h w"),
-                            nrow=output.shape[1],
-                            scale_each=True,
-                        ),
-                        caption="Denoising steps, Target, Input View",
-                    )
-
-                new_lr = lr_scheduler.get_cur_lr(it)
-                for param_group in optimizer.param_groups:
-                    param_group["lr"] = new_lr
-
-                t0 = time.perf_counter()
-
-                images = batch["view"].to(device)
-                cond = batch["cond"].to(device)
-                angle = batch["angle"].to(device)
-
-                model.train()
-                optimizer.zero_grad()
-                loss = model(images, y_cond=cond, angle=angle)
-                loss.backward()
-                optimizer.step()
-                time_elapsed += time.perf_counter() - t0
-
-                if log_every > 0 and it % log_every == 0:
-                    log_dict["t"] = time_elapsed
-                    log_dict["lr"] = new_lr
-                    log_dict["loss"] = loss.item()
-
-                if args.wandb and log_dict:
-                    wandb.log(log_dict, step=it)
-
-                if it > max_it:
-                    print("Maximum iteration count reached.")
                     if rank == 0:
-                        checkpoint.save(
-                            "model.pt",
+                        checkpoint_dict = {
+                            "epoch_no": epoch_no,
+                            "it": it,
+                            "t": time_elapsed,
+                            "metric_val_best": metric_val_best,
+                            "run_id": run_id,
+                        }
+
+                        if (
+                            (checkpoint_every > 0)
+                            and (it % checkpoint_every) == 0
+                            and it > 0
+                        ):
+                            checkpoint.save("model.pt", **checkpoint_dict)
+
+                    # Run validation
+                    if test_eval or (
+                        it > 0 and validate_every > 0 and (it % validate_every) == 0
+                    ):
+                        images_path = os.path.join(tmp_dir, f"images-{it}")
+                        ground_truth_path = os.path.join(images_path, "ground-truth")
+                        generated_path = os.path.join(images_path, "generated")
+                        os.makedirs(images_path)
+                        os.makedirs(generated_path)
+                        os.makedirs(ground_truth_path)
+                        model.eval()
+                        print("Running evaluation...")
+
+                        if compute_fid:
+                            losses = list()
+                            generated_batches = list()
+                            ground_truth_batches = list()
+
+                            for val_batch in val_loader:
+                                images = batch["cond"].to(device)
+                                cond = batch["cond"].to(device)
+                                angle = batch["angle"].to(device)
+                                with torch.no_grad():
+                                    loss = model(images, y_cond=cond)
+                                    (
+                                        *_,
+                                        generated_samples,
+                                        ground_truth,
+                                    ) = model.generate(cond, angle=angle)
+                                    generated_batches.append(generated_samples)
+                                    ground_truth_batches.append(ground_truth)
+
+                                losses.append(loss.item())
+
+                            cnt = 0
+                            for gt_batch, generated_batch in zip(
+                                ground_truth_batches, generated_batches
+                            ):
+                                for gt_sample, generated_sample in zip(
+                                    gt_batch, generated_batch
+                                ):
+                                    # print(gt_sample.shape, generated_sample.shape)
+                                    save_image(
+                                        gt_sample,
+                                        os.path.join(ground_truth_path, f"{cnt}.png"),
+                                    )
+                                    save_image(
+                                        generated_sample,
+                                        os.path.join(generated_path, f"{cnt}.png"),
+                                    )
+                                    cnt += 1
+
+                            fid_score = fid.compute_fid(
+                                ground_truth_path, generated_path
+                            )
+                            log_dict["fid_score"] = fid_score
+                            avg_loss = np.mean(losses)
+                            log_dict["val_loss"] = avg_loss
+                            if avg_loss < metric_val_best:
+                                metric_val_best = avg_loss
+                                checkpoint.save("model_best.pt")
+
+                        print("Running image generation...")
+                        input_images_val = val_vis_data["input_images"].to(device)
+                        input_camera_pos_val = val_vis_data["input_camera_pos"].to(
+                            device
                         )
-                    exit(0)
+                        input_rays_val = val_vis_data["input_rays"].to(device)
+
+                        target_images_val = val_vis_data["target_images"].to(device)
+                        target_camera_pos_val = val_vis_data["target_camera_pos"].to(
+                            device
+                        )
+                        target_rays_val = val_vis_data["target_rays"].to(device)
+
+                        i = np.random.randint(18)
+                        target_image_val = target_images_val[:, i, ...][:, None, ...]
+                        target_camera_p_val = target_camera_pos_val[:, i, ...][
+                            :, None, ...
+                        ]
+                        target_ray_val = target_rays_val[:, i, ...][:, None, ...]
+
+                        y_t, generated_batch, *_ = model.generate(
+                            input_images_val,
+                            target_camera_p_val,
+                            input_camera_pos_val,
+                            target_ray_val,
+                            input_rays_val,
+                        )
+
+                        output = torch.cat(
+                            (
+                                torch.clamp(generated_batch, 0, 1),
+                                target_image,
+                                input_images,
+                            ),
+                            dim=1,
+                        )
+                        log_dict["output"] = wandb.Image(
+                            make_grid(
+                                rearrange(output, "b s c h w -> (b s) c h w"),
+                                nrow=output.shape[1],
+                                scale_each=True,
+                            ),
+                            caption="Denoising steps, Target, Input View",
+                        )
+
+                    new_lr = lr_scheduler.get_cur_lr(it)
+                    for param_group in optimizer.param_groups:
+                        param_group["lr"] = new_lr
+
+                    t0 = time.perf_counter()
+
+                    log_dict = dict()
+
+                    target_image = target_images[:, i, ...][:, None, ...]
+                    target_camera_p = target_camera_pos[:, i, ...][:, None, ...]
+                    target_ray = target_rays[:, i, ...][:, None, ...]
+
+                    model.train()
+                    optimizer.zero_grad()
+                    loss = model(
+                        target_image,
+                        input_images,
+                        target_camera_p,
+                        input_camera_pos,
+                        target_ray,
+                        input_rays,
+                    )
+                    loss.backward()
+                    optimizer.step()
+                    time_elapsed += time.perf_counter() - t0
+
+                    if log_every > 0 and it % log_every == 0:
+                        log_dict["t"] = time_elapsed
+                        log_dict["lr"] = new_lr
+                        log_dict["loss"] = loss.item()
+
+                    if args.wandb and log_dict:
+                        wandb.log(log_dict, step=it)
+
+                    if it > max_it:
+                        print("Maximum iteration count reached.")
+                        if rank == 0:
+                            checkpoint.save(
+                                "model.pt",
+                            )
+                        exit(0)

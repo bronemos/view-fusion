@@ -13,7 +13,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 import math
-from timm.models.vision_transformer import Attention, Mlp
+from timm.models.vision_transformer import PatchEmbed, Attention, Mlp
 
 
 def modulate(x, shift, scale):
@@ -70,87 +70,84 @@ class TimestepEmbedder(nn.Module):
         return t_emb
 
 
-class PositionalEncoding(nn.Module):
-    def __init__(self, num_octaves=8, start_octave=0):
+class ViewEmbedder(nn.Module):
+    """
+    Embeds scalar positional information into vector representations.
+    """
+
+    def __init__(self, hidden_size, frequency_embedding_size=256):
         super().__init__()
-        self.num_octaves = num_octaves
-        self.start_octave = start_octave
-
-    def forward(self, coords, rays=None):
-        embed_fns = []
-        batch_size, num_points, dim = coords.shape
-
-        octaves = torch.arange(self.start_octave, self.start_octave + self.num_octaves)
-        octaves = octaves.float().to(coords)
-        multipliers = 2**octaves * math.pi
-        coords = coords.unsqueeze(-1)
-        while len(multipliers.shape) < len(coords.shape):
-            multipliers = multipliers.unsqueeze(0)
-
-        scaled_coords = coords * multipliers
-
-        sines = torch.sin(scaled_coords).reshape(
-            batch_size, num_points, dim * self.num_octaves
+        self.mlp = nn.Sequential(
+            nn.Linear(frequency_embedding_size, hidden_size, bias=True),
+            nn.SiLU(),
+            nn.Linear(hidden_size, hidden_size, bias=True),
         )
-        cosines = torch.cos(scaled_coords).reshape(
-            batch_size, num_points, dim * self.num_octaves
-        )
+        self.frequency_embedding_size = frequency_embedding_size
 
-        result = torch.cat((sines, cosines), -1)
-        return result
+    @staticmethod
+    def view_embedding(t, dim, max_period=10000):
+        """
+        Create sinusoidal positional embeddings.
+        :param t: a 1-D Tensor of N indices, one per batch element.
+                          These may be fractional.
+        :param dim: the dimension of the output.
+        :param max_period: controls the minimum frequency of the embeddings.
+        :return: an (N, D) Tensor of positional embeddings.
+        """
+        # https://github.com/openai/glide-text2im/blob/main/glide_text2im/nn.py
+        half = dim // 2
+        freqs = torch.exp(
+            -math.log(max_period)
+            * torch.arange(start=0, end=half, dtype=torch.float32)
+            / half
+        ).to(device=t.device)
+        args = t[:, None].float() * freqs[None]
+        embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
+        if dim % 2:
+            embedding = torch.cat(
+                [embedding, torch.zeros_like(embedding[:, :1])], dim=-1
+            )
+        return embedding
+
+    def forward(self, v):
+        v_freq = self.view_embedding(v, self.frequency_embedding_size)
+        v_emb = self.mlp(v_freq)
+        return v_emb
 
 
-class RayEncoder(nn.Module):
-    def __init__(
-        self, pos_octaves=8, pos_start_octave=0, ray_octaves=4, ray_start_octave=0
-    ):
+class LabelEmbedder(nn.Module):
+    """
+    Embeds class labels into vector representations. Also handles label dropout for classifier-free guidance.
+    """
+
+    def __init__(self, num_classes, hidden_size, dropout_prob):
         super().__init__()
-        self.pos_encoding = PositionalEncoding(
-            num_octaves=pos_octaves, start_octave=pos_start_octave
+        use_cfg_embedding = dropout_prob > 0
+        self.embedding_table = nn.Embedding(
+            num_classes + use_cfg_embedding, hidden_size
         )
-        self.ray_encoding = PositionalEncoding(
-            num_octaves=ray_octaves, start_octave=ray_start_octave
-        )
+        self.num_classes = num_classes
+        self.dropout_prob = dropout_prob
 
-    def forward(self, pos, rays):
-        if len(rays.shape) == 4:
-            batchsize, height, width, dims = rays.shape
-            pos_enc = self.pos_encoding(pos.unsqueeze(1))
-            pos_enc = pos_enc.view(batchsize, pos_enc.shape[-1], 1, 1)
-            pos_enc = pos_enc.repeat(1, 1, height, width)
-            rays = rays.flatten(1, 2)
-
-            ray_enc = self.ray_encoding(rays)
-            ray_enc = ray_enc.view(batchsize, height, width, ray_enc.shape[-1])
-            ray_enc = ray_enc.permute((0, 3, 1, 2))
-            x = torch.cat((pos_enc, ray_enc), 1)
+    def token_drop(self, labels, force_drop_ids=None):
+        """
+        Drops labels to enable classifier-free guidance.
+        """
+        if force_drop_ids is None:
+            drop_ids = (
+                torch.rand(labels.shape[0], device=labels.device) < self.dropout_prob
+            )
         else:
-            pos_enc = self.pos_encoding(pos)
-            ray_enc = self.ray_encoding(rays)
-            x = torch.cat((pos_enc, ray_enc), -1)
+            drop_ids = force_drop_ids == 1
+        labels = torch.where(drop_ids, self.num_classes, labels)
+        return labels
 
-        return x
-
-
-class SRTConvBlock(nn.Module):
-    def __init__(self, idim, hdim=None, odim=None):
-        super().__init__()
-        if hdim is None:
-            hdim = idim
-
-        if odim is None:
-            odim = 2 * hdim
-
-        conv_kwargs = {"bias": False, "kernel_size": 3, "padding": 1}
-        self.layers = nn.Sequential(
-            nn.Conv2d(idim, hdim, stride=1, **conv_kwargs),
-            nn.ReLU(),
-            nn.Conv2d(hdim, odim, stride=2, **conv_kwargs),
-            nn.ReLU(),
-        )
-
-    def forward(self, x):
-        return self.layers(x)
+    def forward(self, labels, train, force_drop_ids=None):
+        use_dropout = self.dropout_prob > 0
+        if (train and use_dropout) or (force_drop_ids is not None):
+            labels = self.token_drop(labels, force_drop_ids)
+        embeddings = self.embedding_table(labels)
+        return embeddings
 
 
 #################################################################################
@@ -237,29 +234,29 @@ class DiT(nn.Module):
         depth=28,
         num_heads=16,
         mlp_ratio=4.0,
-        num_conv_blocks=3,
-        pos_start_octave=0,
+        class_dropout_prob=0.1,
+        num_classes=1000,
+        learn_sigma=True,
     ):
         super().__init__()
+        self.learn_sigma = learn_sigma
         self.in_channels = in_channel
+        # self.out_channels = in_channels * 2 if learn_sigma else in_channels
         self.out_channels = out_channel
         self.patch_size = patch_size
         self.num_heads = num_heads
 
-        self.t_embedder = TimestepEmbedder(hidden_size)
-
-        self.ray_encoder = RayEncoder(
-            pos_octaves=15, pos_start_octave=pos_start_octave, ray_octaves=15
+        self.x_embedder = PatchEmbed(
+            image_size, patch_size, in_channel, hidden_size, bias=True
         )
-        conv_blocks = [SRTConvBlock(idim=183, hdim=96)]
-        cur_hdim = 192
-        for _ in range(1, num_conv_blocks):
-            conv_blocks.append(SRTConvBlock(idim=cur_hdim, odim=None))
-            cur_hdim *= 2
-
-        self.conv_blocks = nn.Sequential(*conv_blocks)
-
-        self.per_patch_linear = nn.Conv2d(cur_hdim, 768, kernel_size=1)
+        self.t_embedder = TimestepEmbedder(hidden_size)
+        # self.y_embedder = LabelEmbedder(num_classes, hidden_size, class_dropout_prob)
+        self.y_embedder = ViewEmbedder(hidden_size)
+        num_patches = self.x_embedder.num_patches
+        # Will use fixed sin-cos embedding:
+        self.pos_embed = nn.Parameter(
+            torch.zeros(1, num_patches, hidden_size), requires_grad=False
+        )
 
         self.blocks = nn.ModuleList(
             [
@@ -268,8 +265,6 @@ class DiT(nn.Module):
             ]
         )
         self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
-        self.upscale = nn.ConvTranspose1d(448, image_size**2 // patch_size**2, 1)
-
         self.initialize_weights()
 
     def initialize_weights(self):
@@ -281,6 +276,20 @@ class DiT(nn.Module):
                     nn.init.constant_(module.bias, 0)
 
         self.apply(_basic_init)
+
+        # Initialize (and freeze) pos_embed by sin-cos embedding:
+        pos_embed = get_2d_sincos_pos_embed(
+            self.pos_embed.shape[-1], int(self.x_embedder.num_patches**0.5)
+        )
+        self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
+
+        # Initialize patch_embed like nn.Linear (instead of nn.Conv2d):
+        w = self.x_embedder.proj.weight.data
+        nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
+        nn.init.constant_(self.x_embedder.proj.bias, 0)
+
+        # Initialize label embedding table:
+        # nn.init.normal_(self.y_embedder.embedding_table.weight, std=0.02)
 
         # Initialize timestep embedding MLP:
         nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
@@ -303,7 +312,7 @@ class DiT(nn.Module):
         imgs: (N, H, W, C)
         """
         c = self.out_channels
-        p = self.patch_size
+        p = self.x_embedder.patch_size[0]
         h = w = int(x.shape[1] ** 0.5)
         assert h * w == x.shape[1]
 
@@ -312,48 +321,26 @@ class DiT(nn.Module):
         imgs = x.reshape(shape=(x.shape[0], c, h * p, h * p))
         return imgs
 
-    def forward(self, images, t, camera_pos, rays):
+    def forward(self, x, t, y=None):
         """
         Forward pass of DiT.
-        images: (N, V, C, H, W) tensor of spatial inputs (images or latent representations of images)
+        x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
         t: (N,) tensor of diffusion timesteps
-        camera_pos: (N, V, 3) camera positions
-        rays: (N, V, H, W, 3) rays from the camera positions
+        y: (N,) tensor of class labels
         """
-
-        # print(images.shape)
-        batch_size, num_images = images.shape[:2]
-
-        x = images.flatten(0, 1)
-        camera_pos = camera_pos.flatten(0, 1)
-        rays = rays.flatten(0, 1)
-
-        ray_enc = self.ray_encoder(camera_pos, rays)
-        x = torch.cat((x, ray_enc), 1)
-        # print(f"F_i {x.shape}")
-        x = self.conv_blocks(x)
-        # print(f"conv {x.shape}")
-        x = self.per_patch_linear(x)
-        # print(f"linear {x.shape}")
-        x = x.flatten(2, 3).permute(0, 2, 1)
-
-        # TODO figure out dimensions
-        patches_per_image, channels_per_patch = x.shape[1:]
-        # print(x.shape)
-        # print(patches_per_image)
-        x = x.reshape(
-            batch_size, num_images * patches_per_image, channels_per_patch
-        )  # (N, T, D), where T = H * W / patch_size ** 2 * num_images
-
-        # TODO adjust t_embedder dims so that D == channels_per_patch
-        # fix final_layer so that it projects to correct dimensions -> denoising into a single image
+        x = (
+            self.x_embedder(x) + self.pos_embed
+        )  # (N, T, D), where T = H * W / patch_size ** 2
+        t = t.squeeze()
         t = self.t_embedder(t)  # (N, D)
-        c = t.squeeze()
+        if y is not None:
+            # y = self.y_embedder(y, self.training)  # (N, D)
+            y = self.y_embedder(y)  # (N, D)
+            c = t + y  # (N, D)
+        else:
+            c = t.squeeze()
         for block in self.blocks:
             x = block(x, c)  # (N, T, D)
-        # print(x.shape)
-        x = self.upscale(x)
-        # print(x.shape)
         x = self.final_layer(x, c)  # (N, T, patch_size ** 2 * out_channels)
         x = self.unpatchify(x)  # (N, out_channels, H, W)
         return x

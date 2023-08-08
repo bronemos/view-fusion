@@ -9,4 +9,4 @@ module purge
 module -q load anaconda3
 source activate "/scratch/work/spieglb1/.conda_envs/ldm"
 
-python main.py -c /scratch/work/spieglb1/palette-view-synthesis/configs/multiview-shapenet-dit.yaml -gpus 0, -t --wandb
+python main_dit.py -c /scratch/work/spieglb1/palette-view-synthesis/configs/multiview-shapenet-dit-srt.yaml -gpus 0, -t --wandb

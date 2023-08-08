@@ -1,0 +1,54 @@
+model:
+  base_learning_rate: 5.0e-05
+  validate_every: 10000
+  denoise_net: dit
+  dit_name: DiT-B/4
+  log_every: 10
+  palette_params:
+    beta_schedule:
+      train:
+        schedule: linear
+        num_timesteps: 2000
+        linear_start: 1.0e-06
+        linear_end: 0.01
+      test:
+        schedule: linear
+        num_timesteps: 1000
+        linear_start: 1.0e-04
+        linear_end: 0.09
+  denoise_net_params:
+    image_size: 64
+    in_channel: 3
+    out_channel: 3
+data:
+  target: main.DataModuleFromConfig
+  params:
+    num_workers: 1
+    batch_size: 32
+    wrap: True
+    train:
+      target: ldm.data.nmr_sharded.NMRShardedDataset
+      params:
+        start_shard: 1
+        end_shard: 12
+        view_cnt: 6
+        path: /scratch/work/spieglb1/datasets/NMR_sharded
+        mode: train
+
+    test:
+      target: ldm.data.nmr_sharded.NMRShardedDataset
+      params:
+        start_shard: 1
+        end_shard: 12
+        view_cnt: 6
+        path: /scratch/work/spieglb1/datasets/NMR_sharded
+        mode: test
+
+    validation:
+      target: ldm.data.nmr_sharded.NMRShardedDataset
+      params:
+        start_shard: 1
+        end_shard: 12
+        view_cnt: 6
+        path: /scratch/work/spieglb1/datasets/NMR_sharded
+        mode: val
