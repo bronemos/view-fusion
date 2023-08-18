@@ -242,9 +242,9 @@ if __name__ == "__main__":
         print("Running image generation...")
         images = val_vis_data["view"].to(device)
         cond = val_vis_data["cond"].to(device)
-        angle = val_vis_data["angle"].to(device)
+        # angle = val_vis_data["angle"].to(device)
 
-        y_t, generated_batch, *_ = model.generate(cond, angle=angle)
+        y_t, generated_batch, *_ = model.generate(cond)
 
         output = torch.cat(
             (
@@ -271,7 +271,7 @@ if __name__ == "__main__":
         model.set_loss(F.mse_loss)
         metric_val_best = float("inf")
 
-        test_eval = False
+        test_eval = True
         compute_fid = False
 
         while True:
@@ -360,16 +360,16 @@ if __name__ == "__main__":
                     print("Running image generation...")
                     images = val_vis_data["view"].to(device)
                     cond = val_vis_data["cond"].to(device)
-                    angle = val_vis_data["angle"].to(device)
+                    # angle = val_vis_data["angle"].to(device)
 
-                    y_t, generated_batch, *_ = model.generate(cond, angle=angle)
+                    y_t, generated_batch, *_ = model.generate(cond)
 
                     output = torch.cat(
                         (
                             torch.clamp(generated_batch, 0, 1),
                             torch.unsqueeze(images, 1),
                             rearrange(
-                                cond[:, :18, ...], "b (v c) h w -> b v c h w", c=3
+                                cond[:, :3, ...], "b (v c) h w -> b v c h w", c=3
                             ),
                         ),
                         dim=1,
@@ -392,11 +392,11 @@ if __name__ == "__main__":
                 print(batch.keys())
                 images = batch["view"].to(device)
                 cond = batch["cond"].to(device)
-                angle = batch["angle"].to(device)
+                # angle = batch["angle"].to(device)
 
                 model.train()
                 optimizer.zero_grad()
-                loss = model(images, y_cond=cond, angle=angle)
+                loss = model(images, y_cond=cond)
                 loss.backward()
                 optimizer.step()
                 time_elapsed += time.perf_counter() - t0
