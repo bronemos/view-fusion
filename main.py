@@ -20,7 +20,7 @@ from utils.checkpoint import Checkpoint
 from utils.metrics import inception_score
 from utils.dist import init_ddp, worker_init_fn
 from data.dataset import create_webdataset, create_webdataset_metzler
-from models.palette import PaletteViewSynthesis
+from models.palette_second import PaletteViewSynthesis
 from models.unet import UNet
 from models.diffusion_transformer_old import DiT_models
 
@@ -389,6 +389,7 @@ if __name__ == "__main__":
 
                 t0 = time.perf_counter()
 
+                print(batch.keys())
                 images = batch["view"].to(device)
                 cond = batch["cond"].to(device)
                 angle = batch["angle"].to(device)

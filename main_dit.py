@@ -281,6 +281,7 @@ if __name__ == "__main__":
                 target_rays = batch["target_rays"].to(device)
                 for i in range(target_images.shape[1]):
                     it += 1
+                    log_dict = dict()
 
                     if rank == 0:
                         checkpoint_dict = {
@@ -391,8 +392,8 @@ if __name__ == "__main__":
                         output = torch.cat(
                             (
                                 torch.clamp(generated_batch, 0, 1),
-                                target_image,
-                                input_images,
+                                target_image_val,
+                                input_images_val,
                             ),
                             dim=1,
                         )
@@ -410,8 +411,6 @@ if __name__ == "__main__":
                         param_group["lr"] = new_lr
 
                     t0 = time.perf_counter()
-
-                    log_dict = dict()
 
                     target_image = target_images[:, i, ...][:, None, ...]
                     target_camera_p = target_camera_pos[:, i, ...][:, None, ...]

@@ -14,6 +14,7 @@ import torch.nn as nn
 import numpy as np
 import math
 from timm.models.vision_transformer import Attention, Mlp
+from einops import rearrange
 
 
 def modulate(x, shift, scale):
@@ -219,6 +220,7 @@ class FinalLayer(nn.Module):
         shift, scale = self.adaLN_modulation(c).chunk(2, dim=1)
         x = modulate(self.norm_final(x), shift, scale)
         x = self.linear(x)
+        # print(x.shape)
         return x
 
 
@@ -239,11 +241,12 @@ class DiT(nn.Module):
         mlp_ratio=4.0,
         num_conv_blocks=3,
         pos_start_octave=0,
+        scale_embeddings=False,
     ):
         super().__init__()
         self.in_channels = in_channel
         self.out_channels = out_channel
-        self.patch_size = patch_size
+        self.patch_size = 8
         self.num_heads = num_heads
 
         self.t_embedder = TimestepEmbedder(hidden_size)
@@ -251,9 +254,10 @@ class DiT(nn.Module):
         self.ray_encoder = RayEncoder(
             pos_octaves=15, pos_start_octave=pos_start_octave, ray_octaves=15
         )
+
         conv_blocks = [SRTConvBlock(idim=183, hdim=96)]
         cur_hdim = 192
-        for _ in range(1, num_conv_blocks):
+        for i in range(1, num_conv_blocks):
             conv_blocks.append(SRTConvBlock(idim=cur_hdim, odim=None))
             cur_hdim *= 2
 
@@ -261,14 +265,28 @@ class DiT(nn.Module):
 
         self.per_patch_linear = nn.Conv2d(cur_hdim, 768, kernel_size=1)
 
+        # Original SRT initializes with stddev=1/math.sqrt(d).
+        # But model initialization likely also differs between torch & jax, and this worked, so, eh.
+        embedding_stdev = (1.0 / math.sqrt(768)) if scale_embeddings else 1.0
+        self.pixel_embedding = nn.Parameter(
+            torch.randn(1, 768, 15, 20) * embedding_stdev
+        )
+        self.canonical_camera_embedding = nn.Parameter(
+            torch.randn(1, 1, 768) * embedding_stdev
+        )
+        self.non_canonical_camera_embedding = nn.Parameter(
+            torch.randn(1, 1, 768) * embedding_stdev
+        )
+
         self.blocks = nn.ModuleList(
             [
                 DiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio)
                 for _ in range(depth)
             ]
         )
-        self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
-        self.upscale = nn.ConvTranspose1d(448, image_size**2 // patch_size**2, 1)
+
+        self.zip_channel_conv = nn.Conv1d(7, 1, 1)
+        self.final_layer = FinalLayer(hidden_size, 8, self.out_channels)
 
         self.initialize_weights()
 
@@ -328,32 +346,41 @@ class DiT(nn.Module):
         camera_pos = camera_pos.flatten(0, 1)
         rays = rays.flatten(0, 1)
 
+        canonical_idxs = torch.zeros(batch_size, num_images)
+        canonical_idxs[:, 0] = 1
+        canonical_idxs = canonical_idxs.flatten(0, 1).unsqueeze(-1).unsqueeze(-1).to(x)
+        camera_id_embedding = (
+            canonical_idxs * self.canonical_camera_embedding
+            + (1.0 - canonical_idxs) * self.non_canonical_camera_embedding
+        )
+
         ray_enc = self.ray_encoder(camera_pos, rays)
         x = torch.cat((x, ray_enc), 1)
-        # print(f"F_i {x.shape}")
         x = self.conv_blocks(x)
-        # print(f"conv {x.shape}")
         x = self.per_patch_linear(x)
-        # print(f"linear {x.shape}")
+        height, width = x.shape[2:]
+        x = x + self.pixel_embedding[:, :, :height, :width]
         x = x.flatten(2, 3).permute(0, 2, 1)
+        x = x + camera_id_embedding
 
-        # TODO figure out dimensions
         patches_per_image, channels_per_patch = x.shape[1:]
-        # print(x.shape)
-        # print(patches_per_image)
         x = x.reshape(
             batch_size, num_images * patches_per_image, channels_per_patch
-        )  # (N, T, D), where T = H * W / patch_size ** 2 * num_images
+        )  # (N, T, D), where T = patches_per_image (64) * num_images
+        #  print(x.shape)
 
-        # TODO adjust t_embedder dims so that D == channels_per_patch
-        # fix final_layer so that it projects to correct dimensions -> denoising into a single image
         t = self.t_embedder(t)  # (N, D)
         c = t.squeeze()
         for block in self.blocks:
             x = block(x, c)  # (N, T, D)
         # print(x.shape)
-        x = self.upscale(x)
-        # print(x.shape)
+        # x = self.upscale(x)
+        # print(f"pre-final {x.shape}")
+        x = x.permute(0, 1, 2).reshape(-1, num_images, channels_per_patch)
+        x = self.zip_channel_conv(x)
+        # print("post conv", x.shape)
+        x = x.reshape(batch_size, patches_per_image, -1)
+
         x = self.final_layer(x, c)  # (N, T, patch_size ** 2 * out_channels)
         x = self.unpatchify(x)  # (N, out_channels, H, W)
         return x

@@ -33,7 +33,7 @@ def transform_points(points, transform, translate=True):
 
 
 def create_webdataset_metzler(path):
-    def process_sample(sample, single_view=False):
+    def process_sample(sample, single_view=True):
         if single_view:
             images_idx = np.sort(np.random.choice(range(34), 2, replace=False))
             images = [
@@ -148,7 +148,7 @@ def create_webdataset_dit(path, mode, start_shard=0, end_shard=12, view_cnt=1):
         target_views = np.array(list(set(range(24)) - set(input_views)))
 
         images = [sample[f"{i:04d}.png"] for i in range(24)]
-        images = np.stack(images, 0).astype(np.float32) / 255.0
+        images = np.stack(images, 0).astype(np.float32)
         input_images = np.transpose(images[input_views], (0, 3, 1, 2))
         target_images = np.transpose(images[target_views], (0, 3, 1, 2))
 
