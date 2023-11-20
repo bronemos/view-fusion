@@ -1,6 +1,7 @@
 import numpy as np
 import imageio
 import yaml
+import torch
 import webdataset as wds
 from io import BytesIO
 import cv2
@@ -89,30 +90,39 @@ def create_webdataset_metzler(path):
 
 def create_webdataset(path, mode, start_shard=0, end_shard=12, view_cnt=1):
     def process_sample(sample):
+        view_cnt = np.random.randint(1, 24)
         images_idx = np.random.choice(range(24), view_cnt + 1, replace=False)
-        if view_cnt == 2:
-            images_idx = np.sort(images_idx)
+        # if view_cnt > 1:
+        #    images_idx = np.sort(images_idx)
         images = [sample[f"{i:04d}.png"] for i in images_idx]
         images = np.stack(images, 0).astype(np.float32)
         # angle = 2 * np.pi / 24 * (images_idx[1] - images_idx[0])
-        # sin_angle = (np.full(images.shape[1:3], np.sin(angle)) + 1) / 2
-        # cos_angle = (np.full(images.shape[1:3], np.cos(angle)) + 1) / 2
+        angle = 2 * np.pi / 24 * images_idx[0]
+        sin_angle = (np.full(images.shape[1:3], np.sin(angle)) + 1) / 2
+        cos_angle = (np.full(images.shape[1:3], np.cos(angle)) + 1) / 2
 
         # images = np.concatenate((images, sin_angle, cos_angle), axis=0)
-        # angles = np.stack((sin_angle, cos_angle), 0).astype(np.float32)
+        angles = np.stack((sin_angle, cos_angle), 0).astype(np.float32)
 
-        angle = images_idx[0] / 24
-        angles = np.full(images.shape[1:3], angle)
+        # angle = images_idx[0] / 24
+        # angles = np.full(images.shape[1:3], angle)
 
         images = rearrange(images, "v h w c -> v c h w")  # 2 * ... -1
+        # print(images.shape)
+        # avg_weights = 24 - np.abs(images_idx[1:] - images_idx[0])
+        # cond_avg = np.average(images[1:], axis=0, weights=avg_weights)
+        # print(cond_avg.shape)
 
         cond = np.concatenate(
-            (rearrange(images[1:], "v c h w -> (v c) h w"), angles[None, ...]), axis=0
+            (images[1:], np.repeat(angles[None, ...], view_cnt, axis=0)), axis=1
         ).astype(np.float32)
+        padding = np.zeros((23 - view_cnt, cond.shape[1], cond.shape[2], cond.shape[3]))
+        cond = np.concatenate((cond, padding), axis=0).astype(np.float32)
 
         result = {
             "view": images[0],
-            "cond": cond[:-1],
+            "cond": cond,
+            "view_cnt": view_cnt,
             "angle": images_idx[0] / 24,
             "scene_hash": sample["__key__"],
         }
@@ -138,6 +148,15 @@ def create_webdataset(path, mode, start_shard=0, end_shard=12, view_cnt=1):
         )
 
     return webdataset.shuffle(100).decode("rgb").map(lambda x: process_sample(x))
+
+
+def collate_variable_length(batch):
+    print(batch[0].keys())
+    padded_cond = torch.nn.utils.rnn.pad_sequence(
+        [cond_view for cond_view in batch["cond"]], batch_first=True
+    )
+    batch["cond"] = padded_cond
+    return batch
 
 
 def create_webdataset_dit(path, mode, start_shard=0, end_shard=12, view_cnt=1):

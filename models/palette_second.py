@@ -7,7 +7,6 @@ from einops import rearrange
 from functools import partial
 from tqdm import tqdm
 from torch import nn
-from models.openai_unet.unet import UNetModel
 from models.diffusion_transformer import DiT_models, DiT
 from models.unet import UNet
 

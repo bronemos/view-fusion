@@ -10,6 +10,14 @@ import numpy as np
 from scipy.stats import entropy
 
 
+def psnr(generated, target):
+    pass
+
+
+def ssim():
+    pass
+
+
 def inception_score(imgs, cuda=True, batch_size=32, resize=False, splits=1):
     """Computes the inception score of the generated images imgs
 

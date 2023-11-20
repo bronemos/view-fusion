@@ -7,11 +7,6 @@ from einops import rearrange
 from functools import partial
 from tqdm import tqdm
 from torch import nn
-from models.openai_unet.unet import UNetModel
-from models.diffusion_transformer import DiT_models, DiT
-from models.unet import UNet
-
-from cleanfid import fid
 
 
 class PaletteViewSynthesis(nn.Module):
@@ -80,7 +75,8 @@ class PaletteViewSynthesis(nn.Module):
         y_0_hat = self.predict_start_from_noise(
             y_t,
             t=t,
-            noise=self.denoise_fn(torch.cat([y_cond, y_t], dim=1), noise_level),
+            # noise=self.denoise_fn(torch.cat([y_cond, y_t], dim=1), noise_level),
+            noise=self.denoise_fn(y_t, y_cond, noise_level),
         )
 
         if clip_denoised:
@@ -112,7 +108,17 @@ class PaletteViewSynthesis(nn.Module):
         ), "num_timesteps must greater than sample_num"
         sample_inter = self.num_timesteps // sample_num
 
-        y_t = default(y_t, lambda: torch.randn_like(y_cond[:, :3, ...]))
+        # y_t = default(y_t, lambda: torch.randn_like(y_cond[:, :3, ...]))
+        y_t = default(
+            y_t,
+            lambda: torch.randn(
+                y_cond.shape[0],
+                3,
+                y_cond.shape[3],
+                y_cond.shape[4],
+                device=y_cond.device,
+            ),
+        )
         ret_arr = y_t
         for i in tqdm(
             reversed(range(0, self.num_timesteps)),
@@ -156,9 +162,10 @@ class PaletteViewSynthesis(nn.Module):
                 torch.cat([y_cond, y_noisy], dim=1), sample_gammas, y=angle
             )
         else:
-            noise_hat = self.denoise_fn(
-                torch.cat([y_cond, y_noisy], dim=1), sample_gammas
-            )
+            # noise_hat = self.denoise_fn(
+            #    torch.cat([y_cond, y_noisy], dim=1), sample_gammas
+            # )
+            noise_hat = self.denoise_fn(y_noisy, y_cond, sample_gammas)
         loss = self.loss_fn(noise, noise_hat)
 
         return loss

@@ -19,9 +19,13 @@ from cleanfid import fid
 from utils.checkpoint import Checkpoint
 from utils.metrics import inception_score
 from utils.dist import init_ddp, worker_init_fn
-from data.dataset import create_webdataset, create_webdataset_metzler
+from data.dataset import (
+    create_webdataset,
+    create_webdataset_metzler,
+    collate_variable_length,
+)
 from models.palette_single import PaletteViewSynthesis
-from models.unet import UNet
+from models.unet_modified import UNet
 from models.diffusion_transformer_old import DiT_models
 
 
@@ -63,6 +67,7 @@ if __name__ == "__main__":
             raise ValueError("Source directory (-s, --src_dir) must be provided.")
         out_dir = Path(args.src_dir)
         tmp_name = os.path.basename(args.src_dir)
+        now = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
         with open(os.path.join(args.src_dir, "config.yaml")) as f:
             config = yaml.load(f, Loader=yaml.CLoader)
 
@@ -138,24 +143,32 @@ if __name__ == "__main__":
         pin_memory=True,
         sampler=train_sampler,
         worker_init_fn=worker_init_fn,
+        # collate_fn=collate_variable_length,
         persistent_workers=True,
     )
 
     val_loader = torch.utils.data.DataLoader(
         val_dataset,
-        batch_size=max(1, batch_size // 8),
+        batch_size=batch_size,
         num_workers=1,
         sampler=val_sampler,
         pin_memory=False,
         worker_init_fn=worker_init_fn,
+        # collate_fn=collate_variable_length,
         persistent_workers=True,
     )
 
     val_vis_loader = torch.utils.data.DataLoader(
-        val_dataset, batch_size=12, worker_init_fn=worker_init_fn
+        val_dataset,
+        batch_size=12,
+        worker_init_fn=worker_init_fn,
+        # collate_fn=collate_variable_length,
     )
     train_vis_loader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=12, worker_init_fn=worker_init_fn
+        train_dataset,
+        batch_size=12,
+        worker_init_fn=worker_init_fn,
+        # collate_fn=collate_variable_length,
     )
     val_vis_data = next(iter(val_vis_loader))
     train_vis_data = next(iter(train_vis_loader))
@@ -239,29 +252,72 @@ if __name__ == "__main__":
         log_dict = dict()
         model.eval()
 
-        print("Running image generation...")
-        images = val_vis_data["view"].to(device)
-        cond = val_vis_data["cond"].to(device)
-        # angle = val_vis_data["angle"].to(device)
+        images_path = os.path.join(tmp_dir, f"images-{it}-{now}")
+        ground_truth_path = os.path.join(images_path, "ground-truth")
+        generated_path = os.path.join(images_path, "generated")
+        os.makedirs(images_path)
+        os.makedirs(generated_path)
+        os.makedirs(ground_truth_path)
+        compute_fid = False
+        generate = False
+        if compute_fid:
+            losses = list()
+            generated_batches = list()
+            ground_truth_batches = list()
 
-        y_t, generated_batch, *_ = model.generate(cond)
+            for val_batch in val_loader:
+                images = val_batch["view"].to(device)
+                cond = val_batch["cond"].to(device)
+                # angle = batch["angle"].to(device)
+                with torch.no_grad():
+                    *_, generated_samples = model.generate(cond)
+                    generated_batches.append(generated_samples)
+                    ground_truth_batches.append(images)
 
-        output = torch.cat(
-            (
-                torch.clamp(generated_batch, 0, 1),
-                torch.unsqueeze(images, 1),
-                torch.unsqueeze(cond, 1)[:, :, :3, ...],
-            ),
-            dim=1,
-        )
-        log_dict["inference_output"] = wandb.Image(
-            make_grid(
-                rearrange(output, "b s c h w -> (b s) c h w"),
-                nrow=output.shape[1],
-                scale_each=True,
-            ),
-            caption="Denoising steps, Target, Input View",
-        )
+            cnt = 0
+            for gt_batch, generated_batch in zip(
+                ground_truth_batches, generated_batches
+            ):
+                for gt_sample, generated_sample in zip(gt_batch, generated_batch):
+                    # print(gt_sample.shape, generated_sample.shape)
+                    save_image(
+                        gt_sample,
+                        os.path.join(ground_truth_path, f"{cnt}.png"),
+                    )
+                    save_image(
+                        generated_sample,
+                        os.path.join(generated_path, f"{cnt}.png"),
+                    )
+                    cnt += 1
+
+            fid_score = fid.compute_fid(ground_truth_path, generated_path)
+            print(fid_score)
+            log_dict["fid_score"] = fid_score
+
+        if generate:
+            print("Running image generation...")
+            images = val_vis_data["view"].to(device)
+            cond = val_vis_data["cond"].to(device)
+            # angle = val_vis_data["angle"].to(device)
+
+            y_t, generated_batch, *_ = model.generate(cond)
+
+            output = torch.cat(
+                (
+                    torch.clamp(generated_batch, 0, 1),
+                    torch.unsqueeze(images, 1),
+                    torch.unsqueeze(cond, 1)[:, :, :3, ...],
+                ),
+                dim=1,
+            )
+            log_dict["inference_output"] = wandb.Image(
+                make_grid(
+                    rearrange(output, "b s c h w -> (b s) c h w"),
+                    nrow=output.shape[1],
+                    scale_each=True,
+                ),
+                caption="Denoising steps, Target, Input View",
+            )
         wandb.log(log_dict)
 
         exit(0)
@@ -271,8 +327,9 @@ if __name__ == "__main__":
         model.set_loss(F.mse_loss)
         metric_val_best = float("inf")
 
-        test_eval = True
+        test_eval = False
         compute_fid = False
+        look_back = False
 
         while True:
             epoch_no += 1
@@ -368,12 +425,14 @@ if __name__ == "__main__":
                         (
                             torch.clamp(generated_batch, 0, 1),
                             torch.unsqueeze(images, 1),
-                            rearrange(
-                                cond[:, :3, ...], "b (v c) h w -> b v c h w", c=3
-                            ),
+                            cond[:, :, :3, ...]
+                            # rearrange(
+                            #    cond[:, :3, ...], "b (v c) h w -> b v c h w", c=3
+                            # ),
                         ),
                         dim=1,
                     )
+                    output = torch.nn.utils.rnn.pad_sequence(output, batch_first=True)
                     log_dict["output"] = wandb.Image(
                         make_grid(
                             rearrange(output, "b s c h w -> (b s) c h w"),
@@ -389,7 +448,6 @@ if __name__ == "__main__":
 
                 t0 = time.perf_counter()
 
-                print(batch.keys())
                 images = batch["view"].to(device)
                 cond = batch["cond"].to(device)
                 # angle = batch["angle"].to(device)
@@ -399,6 +457,26 @@ if __name__ == "__main__":
                 loss = model(images, y_cond=cond)
                 loss.backward()
                 optimizer.step()
+                if look_back:
+                    model.eval()
+                    *_, generated_samples = model.generate(cond)
+
+                    rev_sin_angle = torch.sin(
+                        2 * torch.pi - torch.arcsin(cond[:, -2, ...])
+                    )[:, None, ...]
+                    rev_cos_angle = torch.cos(
+                        2 * torch.pi - torch.arccos(cond[:, -1, ...])
+                    )[:, None, ...]
+                    rev_cond = torch.cat(
+                        (generated_samples.squeeze(), rev_sin_angle, rev_cos_angle),
+                        dim=1,
+                    )
+                    model.train()
+                    optimizer.zero_grad()
+                    loss = model(
+                        cond[:, :3, ...], rev_cond
+                    )  # cond as images only, generated_samples with angular data
+                    optimizer.step()
                 time_elapsed += time.perf_counter() - t0
 
                 if log_every > 0 and it % log_every == 0:

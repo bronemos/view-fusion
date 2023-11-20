@@ -1,0 +1,63 @@
+model:
+  base_learning_rate: 5.0e-05
+  validate_every: 10000
+  denoise_net: unet
+  log_every: 10
+  masked_cnt: 6
+  single_view: True
+  palette_params:
+    beta_schedule:
+      train:
+        schedule: linear
+        num_timesteps: 2000
+        linear_start: 1.0e-06
+        linear_end: 0.01
+      test:
+        schedule: linear
+        num_timesteps: 1000
+        linear_start: 1.0e-04
+        linear_end: 0.09
+  denoise_net_params:
+    image_size: 64
+    in_channel: 8
+    out_channel: 3
+    inner_channel: 64
+    res_blocks: 3
+    attn_res: [16]
+    channel_mults:
+    - 1
+    - 2
+    - 3
+    - 5
+data:
+  target: main.DataModuleFromConfig
+  params:
+    num_workers: 1
+    batch_size: 64
+    wrap: True
+    train:
+      target: ldm.data.nmr_sharded.NMRShardedDataset
+      params:
+        start_shard: 0
+        end_shard: 12
+        path: /scratch/work/spieglb1/datasets/NMR_sharded
+        mode: train
+        view_cnt: 6
+
+    test:
+      target: ldm.data.nmr_sharded.NMRShardedDataset
+      params:
+        start_shard: 10
+        end_shard: 10
+        path: /scratch/work/spieglb1/datasets/NMR_sharded
+        mode: test
+        view_cnt: 6
+
+    validation:
+      target: ldm.data.nmr_sharded.NMRShardedDataset
+      params:
+        start_shard: 6
+        end_shard: 6
+        path: /scratch/work/spieglb1/datasets/NMR_sharded
+        mode: val
+        view_cnt: 6
