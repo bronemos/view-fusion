@@ -24,9 +24,8 @@ from data.dataset import (
     create_webdataset_metzler,
     collate_variable_length,
 )
-from models.palette_single import PaletteViewSynthesis
-from models.unet_modified import UNet
-from models.diffusion_transformer_old import DiT_models
+from model.palette import PaletteViewSynthesis
+from model.unet import UNet
 
 
 class LrScheduler:
@@ -178,9 +177,6 @@ if __name__ == "__main__":
     denoise_net = config["model"].get("denoise_net", "unet")
     if denoise_net == "unet":
         denoise_fn = UNet(**config["model"]["denoise_net_params"])
-    elif denoise_net == "dit":
-        dit_name = config["model"].get("dit_name", "DiT-L/4")
-        denoise_fn = DiT_models[dit_name](**config["model"]["denoise_net_params"])
     else:
         raise ValueError("Provided denoising function is not supported!")
     model = PaletteViewSynthesis(
