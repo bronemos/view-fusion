@@ -72,11 +72,26 @@ class PaletteViewSynthesis(nn.Module):
 
     def p_mean_variance(self, y_t, t, clip_denoised: bool, y_cond=None):
         noise_level = extract(self.gammas, t, x_shape=(1, 1)).to(y_t.device)
-        y_0_hat = self.predict_start_from_noise(
-            y_t,
-            t=t,
-            noise=self.denoise_fn(torch.cat([y_cond, y_t], dim=1), noise_level),
+
+        bsz, view_cnt = y_cond.shape[:2]
+        y_cond_stacked = rearrange(y_cond, "b v c h w -> (b v) c h w")
+
+        y_t_stacked = rearrange(
+            torch.stack([y_t] * view_cnt, dim=1), "b v c h w -> (b v) c h w"
         )
+
+        noise_level_stacked = rearrange(
+            torch.stack([noise_level] * view_cnt, dim=1), "b v d -> (b v) d"
+        )
+
+        noise_all = self.denoise_fn(
+            torch.cat([y_cond_stacked, y_t_stacked], dim=1), noise_level_stacked
+        )
+        noise_avg = torch.mean(
+            rearrange(noise_all, "(b v) c h w -> b v c h w", b=bsz, v=view_cnt), dim=1
+        )
+
+        y_0_hat = self.predict_start_from_noise(y_t, t=t, noise=noise_avg)
 
         if clip_denoised:
             y_0_hat.clamp_(-1.0, 1.0)
@@ -107,18 +122,7 @@ class PaletteViewSynthesis(nn.Module):
         ), "num_timesteps must greater than sample_num"
         sample_inter = self.num_timesteps // sample_num
 
-        y_t = default(y_t, lambda: torch.randn_like(y_cond[:, :3, ...]))
-        # print(y_cond.shapec)
-        # y_t = default(
-        #     y_t,
-        #     lambda: torch.randn(
-        #         y_cond.shape[0],
-        #         3,
-        #         y_cond.shape[3],
-        #         y_cond.shape[4],
-        #         device=y_cond.device,
-        #     ),
-        # )
+        y_t = default(y_t, lambda: torch.randn_like(y_cond[:, :1, :3, ...]).squeeze())
         ret_arr = y_t
         for i in tqdm(
             reversed(range(0, self.num_timesteps)),

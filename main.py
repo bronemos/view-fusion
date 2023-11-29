@@ -34,6 +34,7 @@ def get_arg_parser():
     parser.add_argument("-gpus", "--gpu_ids", type=str, default=None)
     parser.add_argument("-t", "--train", action="store_true", default=True)
     parser.add_argument("-i", "--inference", action="store_true", default=False)
+    parser.add_argument("-e", "--test_eval", action="store_true", default=False)
     parser.add_argument("-r", "--resume", action="store_true", default=False)
     parser.add_argument("-s", "--src_dir", type=str, default=None)
     parser.add_argument("-m", "--metzler", action="store_true", default=False)
@@ -134,7 +135,7 @@ def main(args):
 
     val_loader = torch.utils.data.DataLoader(
         val_dataset,
-        batch_size=128,
+        batch_size=12,
         num_workers=1,
         sampler=val_sampler,
         pin_memory=False,
@@ -304,7 +305,7 @@ def main(args):
         ssim_best = -np.inf
         psnr_best = -np.inf
 
-        test_eval = False
+        test_eval = args.test_eval
         compute_metrics = True
 
         while True:

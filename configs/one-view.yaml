@@ -3,8 +3,6 @@ model:
   validate_every: 10000
   denoise_net: unet
   log_every: 10
-  masked_cnt: 6
-  single_view: True
   palette_params:
     beta_schedule:
       train:
