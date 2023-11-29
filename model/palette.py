@@ -73,25 +73,29 @@ class PaletteViewSynthesis(nn.Module):
     def p_mean_variance(self, y_t, t, clip_denoised: bool, y_cond=None):
         noise_level = extract(self.gammas, t, x_shape=(1, 1)).to(y_t.device)
 
-        bsz, view_cnt = y_cond.shape[:2]
-        y_cond_stacked = rearrange(y_cond, "b v c h w -> (b v) c h w")
+        if len(y_cond.size()) == 5:
+            bsz, view_cnt = y_cond.shape[:2]
+            y_cond_stacked = rearrange(y_cond, "b v c h w -> (b v) c h w")
 
-        y_t_stacked = rearrange(
-            torch.stack([y_t] * view_cnt, dim=1), "b v c h w -> (b v) c h w"
-        )
+            y_t_stacked = rearrange(
+                torch.stack([y_t] * view_cnt, dim=1), "b v c h w -> (b v) c h w"
+            )
 
-        noise_level_stacked = rearrange(
-            torch.stack([noise_level] * view_cnt, dim=1), "b v d -> (b v) d"
-        )
+            noise_level_stacked = rearrange(
+                torch.stack([noise_level] * view_cnt, dim=1), "b v d -> (b v) d"
+            )
 
-        noise_all = self.denoise_fn(
-            torch.cat([y_cond_stacked, y_t_stacked], dim=1), noise_level_stacked
-        )
-        noise_avg = torch.mean(
-            rearrange(noise_all, "(b v) c h w -> b v c h w", b=bsz, v=view_cnt), dim=1
-        )
+            noise_all = self.denoise_fn(
+                torch.cat([y_cond_stacked, y_t_stacked], dim=1), noise_level_stacked
+            )
+            noise = torch.mean(
+                rearrange(noise_all, "(b v) c h w -> b v c h w", b=bsz, v=view_cnt),
+                dim=1,
+            )
+        else:
+            noise = self.denoise_fn(torch.cat([y_cond, y_t], dim=1), noise_level)
 
-        y_0_hat = self.predict_start_from_noise(y_t, t=t, noise=noise_avg)
+        y_0_hat = self.predict_start_from_noise(y_t, t=t, noise=noise)
 
         if clip_denoised:
             y_0_hat.clamp_(-1.0, 1.0)

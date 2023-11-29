@@ -22,7 +22,7 @@ def compute_psnr(generated, target):
 
 
 def compute_ssim(generated, target):
-    return ssim(generated, target, size_average=False)
+    return ssim(generated, target, data_range=1.0, size_average=False)
 
 
 def inception_score(imgs, cuda=True, batch_size=32, resize=False, splits=1):

@@ -77,6 +77,7 @@ def main(args):
 
     max_it = config["model"].get("max_it", 1000000)
     validate_every = config["model"].get("validate_every", 5000)
+    validate_from = config["model"].get("validate_from", 50000)
     checkpoint_every = config["model"].get("checkpoint_every", 10)
     log_every = config["model"].get("log_every", 10)
     masked_cnt = config["model"].get("masked_cnt", 6)
@@ -335,7 +336,9 @@ def main(args):
 
                 # Run validation
                 if test_eval or (
-                    it > 0 and validate_every > 0 and (it % validate_every) == 0
+                    it >= validate_from
+                    and validate_every > 0
+                    and (it % validate_every) == 0
                 ):
                     images_path = os.path.join(tmp_dir, f"images-{it}")
                     ground_truth_path = os.path.join(images_path, "ground-truth")
