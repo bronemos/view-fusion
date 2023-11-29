@@ -44,14 +44,7 @@ def get_arg_parser():
     return parser
 
 
-def main():
-    pass
-
-
-if __name__ == "__main__":
-    parser = get_arg_parser()
-    args = parser.parse_args()
-
+def main(args):
     log_dir = "./logs"
     is_metzler = args.metzler
 
@@ -207,11 +200,6 @@ if __name__ == "__main__":
     it = load_dict.get("it", -1)
     time_elapsed = load_dict.get("t", 0.0)
     run_id = load_dict.get("run_id", None)
-    # metric_val_best = load_dict.get("loss_val_best", -model_selection_sign * np.inf)
-
-    # print(
-    #    f"Current best validation metric ({model_selection_metric}): {metric_val_best:.8f}."
-    # )
 
     if args.wandb:
         import wandb
@@ -490,3 +478,10 @@ if __name__ == "__main__":
                             "model.pt",
                         )
                     exit(0)
+
+
+if __name__ == "__main__":
+    parser = get_arg_parser()
+    args = parser.parse_args()
+
+    main(args)
