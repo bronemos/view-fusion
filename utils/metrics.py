@@ -9,13 +9,20 @@ from torchvision.models.inception import inception_v3
 import numpy as np
 from scipy.stats import entropy
 
-
-def psnr(generated, target):
-    pass
+from pytorch_msssim import ssim
 
 
-def ssim():
-    pass
+def compute_psnr(generated, target):
+    """Computes PSNR between generated and target images.
+    generated -- BxCxHxW
+
+    """
+    mse = torch.mean((generated - target) ** 2, dim=(1, 2, 3))
+    return 20 * torch.log10(1.0 / torch.sqrt(mse))
+
+
+def compute_ssim(generated, target):
+    return ssim(generated, target, size_average=False)
 
 
 def inception_score(imgs, cuda=True, batch_size=32, resize=False, splits=1):

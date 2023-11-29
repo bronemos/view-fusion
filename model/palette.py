@@ -70,13 +70,12 @@ class PaletteViewSynthesis(nn.Module):
         )
         return posterior_mean, posterior_log_variance_clipped
 
-    def p_mean_variance(self, y_t, t, clip_denoised: bool, y_cond=None, angle=None):
+    def p_mean_variance(self, y_t, t, clip_denoised: bool, y_cond=None):
         noise_level = extract(self.gammas, t, x_shape=(1, 1)).to(y_t.device)
         y_0_hat = self.predict_start_from_noise(
             y_t,
             t=t,
-            # noise=self.denoise_fn(torch.cat([y_cond, y_t], dim=1), noise_level),
-            noise=self.denoise_fn(y_t, y_cond, noise_level),
+            noise=self.denoise_fn(torch.cat([y_cond, y_t], dim=1), noise_level),
         )
 
         if clip_denoised:
@@ -92,15 +91,15 @@ class PaletteViewSynthesis(nn.Module):
         return sample_gammas.sqrt() * y_0 + (1 - sample_gammas).sqrt() * noise
 
     @torch.no_grad()
-    def p_sample(self, y_t, t, clip_denoised=True, y_cond=None, angle=None):
+    def p_sample(self, y_t, t, clip_denoised=True, y_cond=None):
         model_mean, model_log_variance = self.p_mean_variance(
-            y_t=y_t, t=t, clip_denoised=clip_denoised, y_cond=y_cond, angle=angle
+            y_t=y_t, t=t, clip_denoised=clip_denoised, y_cond=y_cond
         )
         noise = torch.randn_like(y_t) if any(t > 0) else torch.zeros_like(y_t)
         return model_mean + noise * (0.5 * model_log_variance).exp()
 
     @torch.no_grad()
-    def generate(self, y_cond, y_t=None, y_0=None, mask=None, angle=None, sample_num=8):
+    def generate(self, y_cond, y_t=None, y_0=None, sample_num=8):
         b, *_ = y_cond.shape
 
         assert (
@@ -108,17 +107,18 @@ class PaletteViewSynthesis(nn.Module):
         ), "num_timesteps must greater than sample_num"
         sample_inter = self.num_timesteps // sample_num
 
-        # y_t = default(y_t, lambda: torch.randn_like(y_cond[:, :3, ...]))
-        y_t = default(
-            y_t,
-            lambda: torch.randn(
-                y_cond.shape[0],
-                3,
-                y_cond.shape[3],
-                y_cond.shape[4],
-                device=y_cond.device,
-            ),
-        )
+        y_t = default(y_t, lambda: torch.randn_like(y_cond[:, :3, ...]))
+        # print(y_cond.shapec)
+        # y_t = default(
+        #     y_t,
+        #     lambda: torch.randn(
+        #         y_cond.shape[0],
+        #         3,
+        #         y_cond.shape[3],
+        #         y_cond.shape[4],
+        #         device=y_cond.device,
+        #     ),
+        # )
         ret_arr = y_t
         for i in tqdm(
             reversed(range(0, self.num_timesteps)),
@@ -126,9 +126,7 @@ class PaletteViewSynthesis(nn.Module):
             total=self.num_timesteps,
         ):
             t = torch.full((b,), i, device=y_cond.device, dtype=torch.long)
-            y_t = self.p_sample(y_t, t, y_cond=y_cond, angle=angle)
-            if mask is not None:
-                y_t = y_0 * (1.0 - mask) + mask * y_t
+            y_t = self.p_sample(y_t, t, y_cond=y_cond)
             if i % sample_inter == 0:
                 ret_arr = torch.cat([ret_arr, y_t], dim=0)
 
@@ -137,11 +135,11 @@ class PaletteViewSynthesis(nn.Module):
             "(s b) c h w -> b s c h w",
             b=b,
         )
-        generated_samples = torch.unsqueeze(ret_arr[:, -1, ...], 1)
+        generated_samples = ret_arr[:, -1, ...]
 
         return y_t, ret_arr, generated_samples
 
-    def forward(self, y_0, y_cond=None, mask=None, angle=None, noise=None):
+    def forward(self, y_0, y_cond=None, noise=None):
         # sampling from p(gammas)
         b, *_ = y_0.shape
         t = torch.randint(1, self.num_timesteps, (b,), device=y_0.device).long()
@@ -157,15 +155,7 @@ class PaletteViewSynthesis(nn.Module):
             y_0=y_0, sample_gammas=sample_gammas.view(-1, 1, 1, 1), noise=noise
         )
 
-        if angle is not None:
-            noise_hat = self.denoise_fn(
-                torch.cat([y_cond, y_noisy], dim=1), sample_gammas, y=angle
-            )
-        else:
-            # noise_hat = self.denoise_fn(
-            #    torch.cat([y_cond, y_noisy], dim=1), sample_gammas
-            # )
-            noise_hat = self.denoise_fn(y_noisy, y_cond, sample_gammas)
+        noise_hat = self.denoise_fn(torch.cat([y_cond, y_noisy], dim=1), sample_gammas)
         loss = self.loss_fn(noise, noise_hat)
 
         return loss

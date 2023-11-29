@@ -1,4 +1,4 @@
-# adopted from https://github.com/stelzner/srt
+# Adopted from https://github.com/stelzner/srt
 
 import os
 import torch

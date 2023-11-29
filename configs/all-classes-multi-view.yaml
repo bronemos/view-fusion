@@ -1,6 +1,6 @@
 model:
   base_learning_rate: 5.0e-05
-  validate_every: 10000
+  validate_every: 5000
   denoise_net: unet
   log_every: 10
   masked_cnt: 6
@@ -33,7 +33,7 @@ data:
   target: main.DataModuleFromConfig
   params:
     num_workers: 1
-    batch_size: 64
+    batch_size: 32
     wrap: True
     train:
       target: ldm.data.nmr_sharded.NMRShardedDataset

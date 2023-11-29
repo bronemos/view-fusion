@@ -1,6 +1,6 @@
 model:
   base_learning_rate: 5.0e-05
-  validate_every: 10000
+  validate_every: 5000
   denoise_net: unet
   log_every: 10
   masked_cnt: 6
@@ -33,12 +33,12 @@ data:
   target: main.DataModuleFromConfig
   params:
     num_workers: 1
-    batch_size: 32
+    batch_size: 128
     wrap: True
     train:
       target: ldm.data.nmr_sharded.NMRShardedDataset
       params:
-        start_shard: 1
+        start_shard: 0
         end_shard: 12
         path: /scratch/work/spieglb1/datasets/NMR_sharded
         mode: train
@@ -46,15 +46,15 @@ data:
     test:
       target: ldm.data.nmr_sharded.NMRShardedDataset
       params:
-        start_shard: 1
+        start_shard: 0
         end_shard: 12
-        path: /scratch/work/spieglb1/datasets/NMR_sharded
+        path: /scratch/work/spieglb1/datasets/NMR_sharded_10
         mode: test
 
     validation:
       target: ldm.data.nmr_sharded.NMRShardedDataset
       params:
-        start_shard: 1
+        start_shard: 0
         end_shard: 12
-        path: /scratch/work/spieglb1/datasets/NMR_sharded
+        path: /scratch/work/spieglb1/datasets/NMR_sharded_10
         mode: val
