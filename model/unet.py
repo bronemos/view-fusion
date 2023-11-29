@@ -1,9 +1,7 @@
 import math
-import statistics
 import torch
 from torch import nn
 from inspect import isfunction
-from einops import rearrange
 
 
 class UNet(nn.Module):
@@ -110,36 +108,17 @@ class UNet(nn.Module):
             pre_channel, default(out_channel, in_channel), groups=norm_groups
         )
 
-    def forward(self, x, cond, time):
+    def forward(self, x, time):
         t = self.noise_level_mlp(time) if exists(self.noise_level_mlp) else None
 
-        x_input = x
         feats = []
-        for i in range(cond.shape[1]):
-            x = torch.cat((cond[:, i, ...], x_input), axis=1)
-            feats_view = []
-            for layer in self.downs:
-                if isinstance(layer, ResnetBlocWithAttn):
-                    x = layer(x, t)
-                else:
-                    x = layer(x)
-                feats_view.append(x)
-            feats.append(feats_view)
+        for layer in self.downs:
+            if isinstance(layer, ResnetBlocWithAttn):
+                x = layer(x, t)
+            else:
+                x = layer(x)
+            feats.append(x)
 
-        x = torch.mean(
-            torch.stack([feats_view[-1] for feats_view in feats], axis=0), dim=0
-        )
-
-        feats = [
-            torch.mean(
-                torch.stack([feat_view for feat_view in feats_view_col], dim=0), dim=0
-            )
-            for feats_view_col in zip(*feats)
-        ]
-
-        # print(feats)
-
-        # feats = [print(view_feat_col) for view_feat_col in zip(*feats)]
         for layer in self.mid:
             if isinstance(layer, ResnetBlocWithAttn):
                 x = layer(x, t)

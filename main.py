@@ -17,35 +17,18 @@ from einops import rearrange
 from cleanfid import fid
 
 from utils.checkpoint import Checkpoint
-from utils.metrics import inception_score
+from utils.metrics import compute_ssim, compute_psnr
 from utils.dist import init_ddp, worker_init_fn
+from utils.schedulers import LrScheduler
 from data.dataset import (
     create_webdataset,
     create_webdataset_metzler,
-    collate_variable_length,
 )
-from models.palette_single import PaletteViewSynthesis
-from models.unet_modified import UNet
-from models.diffusion_transformer_old import DiT_models
+from model.palette import PaletteViewSynthesis
+from model.unet import UNet
 
 
-class LrScheduler:
-    """Implements a learning rate schedule with warum up and decay"""
-
-    def __init__(self, peak_lr=4e-4, peak_it=10000, decay_rate=0.5, decay_it=100000):
-        self.peak_lr = peak_lr
-        self.peak_it = peak_it
-        self.decay_rate = decay_rate
-        self.decay_it = decay_it
-
-    def get_cur_lr(self, it):
-        if it < self.peak_it:  # Warmup period
-            return self.peak_lr * (it / self.peak_it)
-        it_since_peak = it - self.peak_it
-        return self.peak_lr * (self.decay_rate ** (it_since_peak / self.decay_it))
-
-
-if __name__ == "__main__":
+def get_arg_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument("-c", "--config", type=str, help="YAML config file")
     parser.add_argument("-gpus", "--gpu_ids", type=str, default=None)
@@ -57,8 +40,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--wandb", action="store_true", help="Log run to Weights and Biases."
     )
-    args = parser.parse_args()
 
+    return parser
+
+
+def main(args):
     log_dir = "./logs"
     is_metzler = args.metzler
 
@@ -66,16 +52,16 @@ if __name__ == "__main__":
         if args.src_dir is None:
             raise ValueError("Source directory (-s, --src_dir) must be provided.")
         out_dir = Path(args.src_dir)
-        tmp_name = os.path.basename(args.src_dir)
+        exp_name = os.path.basename(args.src_dir)
         now = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
         with open(os.path.join(args.src_dir, "config.yaml")) as f:
             config = yaml.load(f, Loader=yaml.CLoader)
 
     else:
-        exp_name = os.path.splitext(os.path.basename(args.config))[0]
+        config_name = os.path.splitext(os.path.basename(args.config))[0]
         now = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
-        out_dir = os.path.join(log_dir, "-".join((now, exp_name)))
-        tmp_name = "-".join((now, exp_name))
+        exp_name = "-".join((now, config_name))
+        out_dir = os.path.join(log_dir, exp_name)
         with open(args.config, "r") as f:
             config = yaml.load(f, Loader=yaml.CLoader)
 
@@ -94,7 +80,7 @@ if __name__ == "__main__":
     log_every = config["model"].get("log_every", 10)
     masked_cnt = config["model"].get("masked_cnt", 6)
 
-    tmp_dir = os.path.join("/tmp", tmp_name)
+    tmp_dir = os.path.join("/tmp", exp_name)
     print(tmp_dir)
     # os.makedirs(tmp_dir)
 
@@ -143,18 +129,16 @@ if __name__ == "__main__":
         pin_memory=True,
         sampler=train_sampler,
         worker_init_fn=worker_init_fn,
-        # collate_fn=collate_variable_length,
         persistent_workers=True,
     )
 
     val_loader = torch.utils.data.DataLoader(
         val_dataset,
-        batch_size=batch_size,
+        batch_size=128,
         num_workers=1,
         sampler=val_sampler,
         pin_memory=False,
         worker_init_fn=worker_init_fn,
-        # collate_fn=collate_variable_length,
         persistent_workers=True,
     )
 
@@ -162,7 +146,6 @@ if __name__ == "__main__":
         val_dataset,
         batch_size=12,
         worker_init_fn=worker_init_fn,
-        # collate_fn=collate_variable_length,
     )
     train_vis_loader = torch.utils.data.DataLoader(
         train_dataset,
@@ -178,9 +161,6 @@ if __name__ == "__main__":
     denoise_net = config["model"].get("denoise_net", "unet")
     if denoise_net == "unet":
         denoise_fn = UNet(**config["model"]["denoise_net_params"])
-    elif denoise_net == "dit":
-        dit_name = config["model"].get("dit_name", "DiT-L/4")
-        denoise_fn = DiT_models[dit_name](**config["model"]["denoise_net_params"])
     else:
         raise ValueError("Provided denoising function is not supported!")
     model = PaletteViewSynthesis(
@@ -192,8 +172,8 @@ if __name__ == "__main__":
     if world_size > 1:
         model = DistributedDataParallel(model, device_ids=[rank], output_device=rank)
 
-    if device == torch.device("cpu"):
-        model = DistributedDataParallel(model)
+    # if device == torch.device("cpu"):
+    #    model = DistributedDataParallel(model)
 
     peak_it = config.get("lr_warmup", 2500)
     decay_it = config.get("decay_it", 4000000)
@@ -220,11 +200,6 @@ if __name__ == "__main__":
     it = load_dict.get("it", -1)
     time_elapsed = load_dict.get("t", 0.0)
     run_id = load_dict.get("run_id", None)
-    # metric_val_best = load_dict.get("loss_val_best", -model_selection_sign * np.inf)
-
-    # print(
-    #    f"Current best validation metric ({model_selection_metric}): {metric_val_best:.8f}."
-    # )
 
     if args.wandb:
         import wandb
@@ -234,7 +209,7 @@ if __name__ == "__main__":
             print(f"Sampled new wandb run_id {run_id}.")
             wandb.init(
                 project="palette-view-synthesis",
-                name=f"{exp_name}-{run_id}",
+                name=f"{exp_name}",
                 id=run_id,
                 resume=True,
                 config=config,
@@ -266,13 +241,13 @@ if __name__ == "__main__":
             ground_truth_batches = list()
 
             for val_batch in val_loader:
-                images = val_batch["view"].to(device)
+                targets = val_batch["target"].to(device)
                 cond = val_batch["cond"].to(device)
                 # angle = batch["angle"].to(device)
                 with torch.no_grad():
                     *_, generated_samples = model.generate(cond)
                     generated_batches.append(generated_samples)
-                    ground_truth_batches.append(images)
+                    ground_truth_batches.append(targets)
 
             cnt = 0
             for gt_batch, generated_batch in zip(
@@ -296,7 +271,7 @@ if __name__ == "__main__":
 
         if generate:
             print("Running image generation...")
-            images = val_vis_data["view"].to(device)
+            targets = val_vis_data["target"].to(device)
             cond = val_vis_data["cond"].to(device)
             # angle = val_vis_data["angle"].to(device)
 
@@ -305,7 +280,7 @@ if __name__ == "__main__":
             output = torch.cat(
                 (
                     torch.clamp(generated_batch, 0, 1),
-                    torch.unsqueeze(images, 1),
+                    torch.unsqueeze(targets, 1),
                     torch.unsqueeze(cond, 1)[:, :, :3, ...],
                 ),
                 dim=1,
@@ -325,11 +300,12 @@ if __name__ == "__main__":
     # Training loop
     if args.train:
         model.set_loss(F.mse_loss)
-        metric_val_best = float("inf")
+        fid_score_best = np.inf
+        ssim_best = -np.inf
+        psnr_best = -np.inf
 
         test_eval = False
-        compute_fid = False
-        look_back = False
+        compute_metrics = True
 
         while True:
             epoch_no += 1
@@ -345,7 +321,7 @@ if __name__ == "__main__":
                         "epoch_no": epoch_no,
                         "it": it,
                         "t": time_elapsed,
-                        "metric_val_best": metric_val_best,
+                        # "metric_val_best": metric_val_best,
                         "run_id": run_id,
                     }
 
@@ -369,26 +345,23 @@ if __name__ == "__main__":
                     model.eval()
                     print("Running evaluation...")
 
-                    if compute_fid:
-                        losses = list()
+                    if compute_metrics:
                         generated_batches = list()
                         ground_truth_batches = list()
 
                         for val_batch in val_loader:
-                            images = batch["cond"].to(device)
-                            cond = batch["cond"].to(device)
-                            angle = batch["angle"].to(device)
+                            targets = val_batch["target"].to(device)
+                            cond = val_batch["cond"].to(device)
                             with torch.no_grad():
-                                loss = model(images, y_cond=cond)
-                                *_, generated_samples, ground_truth = model.generate(
-                                    cond, angle=angle
-                                )
+                                *_, generated_samples = model.generate(cond)
                                 generated_batches.append(generated_samples)
-                                ground_truth_batches.append(ground_truth)
-
-                            losses.append(loss.item())
+                                ground_truth_batches.append(targets)
+                            if test_eval:
+                                break
 
                         cnt = 0
+                        ssims = list()
+                        psnrs = list()
                         for gt_batch, generated_batch in zip(
                             ground_truth_batches, generated_batches
                         ):
@@ -406,29 +379,60 @@ if __name__ == "__main__":
                                 )
                                 cnt += 1
 
-                        fid_score = fid.compute_fid(ground_truth_path, generated_path)
+                                ssims.append(compute_ssim(generated_batch, gt_batch))
+                                psnrs.append(compute_psnr(generated_batch, gt_batch))
+
+                        ssims = torch.cat(ssims)
+                        psnrs = torch.cat(psnrs)
+                        fid_score = fid.compute_fid(
+                            ground_truth_path, generated_path, verbose=False
+                        )
                         log_dict["fid_score"] = fid_score
-                        avg_loss = np.mean(losses)
-                        log_dict["val_loss"] = avg_loss
-                        if avg_loss < metric_val_best:
-                            metric_val_best = avg_loss
-                            checkpoint.save("model_best.pt")
+
+                        ssim = torch.mean(ssims)
+                        log_dict["ssim"] = ssim
+
+                        psnr = torch.mean(psnrs)
+                        log_dict["psnr"] = psnr
+
+                        best_metric_cnt = 0
+                        if ssim > ssim_best:
+                            best_metric_cnt += 1
+                            ssim_best = ssim
+                            checkpoint.save(f"best_model_ssim.pt", **checkpoint_dict)
+                            print(f"Saved best SSIM modle at iteration {it}.")
+
+                        if psnr > psnr_best:
+                            best_metric_cnt += 1
+                            psnr_best = psnr
+                            checkpoint.save(f"best_model_psnr.pt", **checkpoint_dict)
+                            print(f"Saved best PSNR model at iteration {it}.")
+
+                        if fid_score < fid_score_best:
+                            best_metric_cnt += 1
+                            fid_score_best = fid_score
+                            checkpoint.save(f"best_model_fid.pt", **checkpoint_dict)
+                            print(f"Saved best FID model at iteration {it}.")
+
+                        if best_metric_cnt == 3:
+                            checkpoint.save(f"best_model_all.pt", **checkpoint_dict)
+                            print(f"Saved best model at iteration {it}.")
 
                     print("Running image generation...")
-                    images = val_vis_data["view"].to(device)
+                    targets = val_vis_data["target"].to(device)
                     cond = val_vis_data["cond"].to(device)
                     # angle = val_vis_data["angle"].to(device)
 
                     y_t, generated_batch, *_ = model.generate(cond)
 
+                    # print(generated_batch.shape, targets.shape, cond.shape, sep="\n")
                     output = torch.cat(
                         (
                             torch.clamp(generated_batch, 0, 1),
-                            torch.unsqueeze(images, 1),
-                            cond[:, :, :3, ...]
-                            # rearrange(
-                            #    cond[:, :3, ...], "b (v c) h w -> b v c h w", c=3
-                            # ),
+                            torch.unsqueeze(targets, 1),
+                            rearrange(
+                                cond[:, :3, ...], "b (v c) h w -> b v c h w", c=3
+                            ),
                         ),
                         dim=1,
                     )
@@ -448,35 +452,15 @@ if __name__ == "__main__":
 
                 t0 = time.perf_counter()
 
-                images = batch["view"].to(device)
+                targets = batch["target"].to(device)
                 cond = batch["cond"].to(device)
-                # angle = batch["angle"].to(device)
 
                 model.train()
                 optimizer.zero_grad()
-                loss = model(images, y_cond=cond)
+                loss = model(targets, y_cond=cond)
                 loss.backward()
                 optimizer.step()
-                if look_back:
-                    model.eval()
-                    *_, generated_samples = model.generate(cond)
 
-                    rev_sin_angle = torch.sin(
-                        2 * torch.pi - torch.arcsin(cond[:, -2, ...])
-                    )[:, None, ...]
-                    rev_cos_angle = torch.cos(
-                        2 * torch.pi - torch.arccos(cond[:, -1, ...])
-                    )[:, None, ...]
-                    rev_cond = torch.cat(
-                        (generated_samples.squeeze(), rev_sin_angle, rev_cos_angle),
-                        dim=1,
-                    )
-                    model.train()
-                    optimizer.zero_grad()
-                    loss = model(
-                        cond[:, :3, ...], rev_cond
-                    )  # cond as images only, generated_samples with angular data
-                    optimizer.step()
                 time_elapsed += time.perf_counter() - t0
 
                 if log_every > 0 and it % log_every == 0:
@@ -494,3 +478,10 @@ if __name__ == "__main__":
                             "model.pt",
                         )
                     exit(0)
+
+
+if __name__ == "__main__":
+    parser = get_arg_parser()
+    args = parser.parse_args()
+
+    main(args)
