@@ -111,6 +111,7 @@ def create_webdataset(path, mode, start_shard=0, end_shard=12, view_cnt=1):
                 f"NMR-{mode}-{start_shard:02d}.tar",
             ),
             shardshuffle=True,
+            resampled=True,
         )
 
     else:
@@ -120,6 +121,7 @@ def create_webdataset(path, mode, start_shard=0, end_shard=12, view_cnt=1):
                 f"NMR-{mode}-{{{start_shard:02d}..{end_shard:02d}}}.tar",
             ),
             shardshuffle=True,
+            resampled=True,
         )
 
     return webdataset.shuffle(100).decode("rgb").map(lambda x: process_sample(x))

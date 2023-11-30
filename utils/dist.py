@@ -1,4 +1,4 @@
-# Adopted from https://github.com/stelzner/srt
+# Partially Adopted from https://github.com/stelzner/srt
 
 import math
 import os
@@ -8,22 +8,14 @@ import torch.distributed as dist
 import numpy as np
 
 
-__LOG10 = math.log(10)
-
-
-def mse2psnr(x):
-    return -10.0 * torch.log(x) / __LOG10
-
-
 def init_ddp():
+    """
+    Initialize Data Distributed Parallel. Use torchrun to run main.py instead of python.
+    """
     try:
         local_rank = int(os.environ["LOCAL_RANK"])
         world_size = int(os.environ["WORLD_SIZE"])
     except KeyError:
-        # TODO fix cpu ddp
-        os.environ["MASTER_ADDR"] = "127.0.0.1"
-        os.environ["MASTER_PORT"] = "29500"
-        dist.init_process_group("gloo", rank=0, world_size=1)
         return 0, 1  # Single GPU run
 
     dist.init_process_group(backend="nccl")

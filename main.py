@@ -80,11 +80,9 @@ def main(args):
     validate_from = config["model"].get("validate_from", 50000)
     checkpoint_every = config["model"].get("checkpoint_every", 10)
     log_every = config["model"].get("log_every", 10)
-    masked_cnt = config["model"].get("masked_cnt", 6)
 
     tmp_dir = os.path.join("/tmp", exp_name)
     print(tmp_dir)
-    # os.makedirs(tmp_dir)
 
     if world_size > 0:
         batch_size = config["data"]["params"]["batch_size"] // world_size
@@ -116,7 +114,9 @@ def main(args):
     )
     train_sampler = val_sampler = None
 
-    if world_size > 1:
+    if isinstance(train_dataset, torch.utils.data.IterableDataset):
+        assert num_workers == 1
+    elif world_size > 1:
         train_sampler = torch.utils.data.distributed.DistributedSampler(
             train_dataset, drop_last=False
         )
@@ -136,7 +136,7 @@ def main(args):
 
     val_loader = torch.utils.data.DataLoader(
         val_dataset,
-        batch_size=12,
+        batch_size=8,
         num_workers=1,
         sampler=val_sampler,
         pin_memory=False,
@@ -238,7 +238,6 @@ def main(args):
         compute_fid = False
         generate = False
         if compute_fid:
-            losses = list()
             generated_batches = list()
             ground_truth_batches = list()
 
@@ -247,7 +246,7 @@ def main(args):
                 cond = val_batch["cond"].to(device)
                 # angle = batch["angle"].to(device)
                 with torch.no_grad():
-                    *_, generated_samples = model.generate(cond)
+                    *_, generated_samples = model(y_cond=cond, generate=True)
                     generated_batches.append(generated_samples)
                     ground_truth_batches.append(targets)
 
@@ -277,7 +276,7 @@ def main(args):
             cond = val_vis_data["cond"].to(device)
             # angle = val_vis_data["angle"].to(device)
 
-            y_t, generated_batch, *_ = model.generate(cond)
+            y_t, generated_batch, *_ = model(y_cond=cond, generate=True)
 
             output = torch.cat(
                 (
@@ -301,7 +300,6 @@ def main(args):
 
     # Training loop
     if args.train:
-        model.set_loss(F.mse_loss)
         fid_score_best = np.inf
         ssim_best = -np.inf
         psnr_best = -np.inf
@@ -323,7 +321,6 @@ def main(args):
                         "epoch_no": epoch_no,
                         "it": it,
                         "t": time_elapsed,
-                        # "metric_val_best": metric_val_best,
                         "run_id": run_id,
                     }
 
@@ -343,9 +340,10 @@ def main(args):
                     images_path = os.path.join(tmp_dir, f"images-{it}")
                     ground_truth_path = os.path.join(images_path, "ground-truth")
                     generated_path = os.path.join(images_path, "generated")
-                    os.makedirs(images_path)
-                    os.makedirs(generated_path)
-                    os.makedirs(ground_truth_path)
+                    if rank == 0:
+                        os.makedirs(images_path)
+                        os.makedirs(generated_path)
+                        os.makedirs(ground_truth_path)
                     model.eval()
                     print("Running evaluation...")
 
@@ -357,7 +355,9 @@ def main(args):
                             targets = val_batch["target"].to(device)
                             cond = val_batch["cond"].to(device)
                             with torch.no_grad():
-                                *_, generated_samples = model.generate(cond)
+                                *_, generated_samples = model(
+                                    y_cond=cond, generate=True
+                                )
                                 generated_batches.append(generated_samples)
                                 ground_truth_batches.append(targets)
                             if test_eval:
@@ -375,11 +375,13 @@ def main(args):
                                 # print(gt_sample.shape, generated_sample.shape)
                                 save_image(
                                     gt_sample,
-                                    os.path.join(ground_truth_path, f"{cnt}.png"),
+                                    os.path.join(
+                                        ground_truth_path, f"{rank}-{cnt}.png"
+                                    ),
                                 )
                                 save_image(
                                     generated_sample,
-                                    os.path.join(generated_path, f"{cnt}.png"),
+                                    os.path.join(generated_path, f"{rank}-{cnt}.png"),
                                 )
                                 cnt += 1
 
@@ -427,7 +429,7 @@ def main(args):
                     cond = val_vis_data["cond"].to(device)
                     # angle = val_vis_data["angle"].to(device)
 
-                    y_t, generated_batch, *_ = model.generate(cond)
+                    y_t, generated_batch, *_ = model(y_cond=cond, generate=True)
 
                     # print(generated_batch.shape, targets.shape, cond.shape, sep="\n")
                     output = torch.cat(
@@ -461,7 +463,7 @@ def main(args):
 
                 model.train()
                 optimizer.zero_grad()
-                loss = model(targets, y_cond=cond)
+                loss = model(y_0=targets, y_cond=cond)
                 loss.backward()
                 optimizer.step()
 

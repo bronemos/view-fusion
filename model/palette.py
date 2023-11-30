@@ -1,6 +1,7 @@
 import math
 import torch
 import numpy as np
+import torch.nn.functional as F
 
 from inspect import isfunction
 from einops import rearrange
@@ -15,9 +16,7 @@ class PaletteViewSynthesis(nn.Module):
 
         self.denoise_fn = denoise_fn
         self.beta_schedule = beta_schedule
-
-    def set_loss(self, loss_fn):
-        self.loss_fn = loss_fn
+        self.loss_fn = F.mse_loss
 
     def set_new_noise_schedule(self, device=torch.device("cuda"), phase="train"):
         to_torch = partial(torch.tensor, dtype=torch.float32, device=device)
@@ -118,7 +117,7 @@ class PaletteViewSynthesis(nn.Module):
         return model_mean + noise * (0.5 * model_log_variance).exp()
 
     @torch.no_grad()
-    def generate(self, y_cond, y_t=None, y_0=None, sample_num=8):
+    def generate(self, y_cond, y_t=None, sample_num=8):
         b, *_ = y_cond.shape
 
         assert (
@@ -147,7 +146,10 @@ class PaletteViewSynthesis(nn.Module):
 
         return y_t, ret_arr, generated_samples
 
-    def forward(self, y_0, y_cond=None, noise=None):
+    def forward(self, y_0=None, y_cond=None, noise=None, generate=False):
+        # generate() wrapped in forward for DDP
+        if generate:
+            return self.generate(y_cond)
         # sampling from p(gammas)
         b, *_ = y_0.shape
         t = torch.randint(1, self.num_timesteps, (b,), device=y_0.device).long()
