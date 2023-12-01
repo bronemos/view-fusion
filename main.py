@@ -18,7 +18,7 @@ from cleanfid import fid
 
 from utils.checkpoint import Checkpoint
 from utils.metrics import compute_ssim, compute_psnr
-from utils.dist import init_ddp, worker_init_fn
+from utils.dist import init_ddp, worker_init_fn, reduce_dict
 from utils.schedulers import LrScheduler
 from data.dataset import (
     create_webdataset,
@@ -226,6 +226,7 @@ def main(args):
             )
 
     if args.inference:
+        print("here")
         log_dict = dict()
         model.eval()
 
@@ -236,7 +237,7 @@ def main(args):
         os.makedirs(generated_path)
         os.makedirs(ground_truth_path)
         compute_fid = False
-        generate = False
+        generate = True
         if compute_fid:
             generated_batches = list()
             ground_truth_batches = list()
@@ -282,7 +283,7 @@ def main(args):
                 (
                     torch.clamp(generated_batch, 0, 1),
                     torch.unsqueeze(targets, 1),
-                    torch.unsqueeze(cond, 1)[:, :, :3, ...],
+                    cond[:, :, :3, ...],
                 ),
                 dim=1,
             )
@@ -350,6 +351,7 @@ def main(args):
                     if compute_metrics:
                         generated_batches = list()
                         ground_truth_batches = list()
+                        eval_dict = dict()
 
                         for val_batch in val_loader:
                             targets = val_batch["target"].to(device)
@@ -390,37 +392,58 @@ def main(args):
 
                         ssims = torch.cat(ssims)
                         psnrs = torch.cat(psnrs)
-                        fid_score = fid.compute_fid(
-                            ground_truth_path, generated_path, verbose=False
+
+                        eval_dict["fid_score"] = torch.tensor(
+                            fid.compute_fid(
+                                ground_truth_path,
+                                generated_path,
+                                verbose=False,
+                                use_dataparallel=False,
+                            ),
+                            dtype=torch.float64,
+                            device=device,
                         )
+                        eval_dict["ssim"] = torch.mean(ssims)
+                        eval_dict["psnr"] = torch.mean(psnrs)
+
+                        reduced_dict = reduce_dict(eval_dict)
+
+                        fid_score = reduced_dict["fid_score"]
                         log_dict["fid_score"] = fid_score
 
-                        ssim = torch.mean(ssims)
+                        ssim = reduced_dict["ssim"]
                         log_dict["ssim"] = ssim
 
-                        psnr = torch.mean(psnrs)
+                        psnr = reduced_dict["psnr"]
                         log_dict["psnr"] = psnr
 
                         best_metric_cnt = 0
                         if ssim > ssim_best:
                             best_metric_cnt += 1
                             ssim_best = ssim
-                            checkpoint.save(f"best_model_ssim.pt", **checkpoint_dict)
-                            print(f"Saved best SSIM modle at iteration {it}.")
+                            if rank == 0:
+                                checkpoint.save(
+                                    f"best_model_ssim.pt", **checkpoint_dict
+                                )
+                                print(f"Saved best SSIM modle at iteration {it}.")
 
                         if psnr > psnr_best:
                             best_metric_cnt += 1
                             psnr_best = psnr
-                            checkpoint.save(f"best_model_psnr.pt", **checkpoint_dict)
-                            print(f"Saved best PSNR model at iteration {it}.")
+                            if rank == 0:
+                                checkpoint.save(
+                                    f"best_model_psnr.pt", **checkpoint_dict
+                                )
+                                print(f"Saved best PSNR model at iteration {it}.")
 
                         if fid_score < fid_score_best:
                             best_metric_cnt += 1
                             fid_score_best = fid_score
-                            checkpoint.save(f"best_model_fid.pt", **checkpoint_dict)
-                            print(f"Saved best FID model at iteration {it}.")
+                            if rank == 0:
+                                checkpoint.save(f"best_model_fid.pt", **checkpoint_dict)
+                                print(f"Saved best FID model at iteration {it}.")
 
-                        if best_metric_cnt == 3:
+                        if best_metric_cnt == 3 and rank == 0:
                             checkpoint.save(f"best_model_all.pt", **checkpoint_dict)
                             print(f"Saved best model at iteration {it}.")
 
@@ -436,9 +459,7 @@ def main(args):
                         (
                             torch.clamp(generated_batch, 0, 1),
                             torch.unsqueeze(targets, 1),
-                            rearrange(
-                                cond[:, :3, ...], "b (v c) h w -> b v c h w", c=3
-                            ),
+                            cond[:, :, :3, ...],
                         ),
                         dim=1,
                     )
