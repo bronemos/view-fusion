@@ -9,8 +9,6 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.optim as optim
-import torch.multiprocessing as mp
-import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel
 from torchvision.utils import make_grid, save_image
 from einops import rearrange
@@ -136,7 +134,7 @@ def main(args):
 
     val_loader = torch.utils.data.DataLoader(
         val_dataset,
-        batch_size=8,
+        batch_size=batch_size,
         num_workers=1,
         sampler=val_sampler,
         pin_memory=False,
@@ -173,6 +171,9 @@ def main(args):
 
     if world_size > 1:
         model = DistributedDataParallel(model, device_ids=[rank], output_device=rank)
+        model_module = model.module
+    else:
+        model_module = model
 
     # if device == torch.device("cpu"):
     #    model = DistributedDataParallel(model)
@@ -185,7 +186,12 @@ def main(args):
     )
     optimizer = optim.Adam(model.parameters(), lr=lr_scheduler.get_cur_lr(0))
     checkpoint = Checkpoint(
-        out_dir, device=device, config=config, model=model, optimizer=optimizer
+        out_dir,
+        device=device,
+        rank=rank,
+        config=config,
+        model=model_module,
+        optimizer=optimizer,
     )
 
     # Try to resume training
@@ -226,7 +232,6 @@ def main(args):
             )
 
     if args.inference:
-        print("here")
         log_dict = dict()
         model.eval()
 
@@ -243,13 +248,13 @@ def main(args):
             ground_truth_batches = list()
 
             for val_batch in val_loader:
-                targets = val_batch["target"].to(device)
+                target = val_batch["target"].to(device)
                 cond = val_batch["cond"].to(device)
                 # angle = batch["angle"].to(device)
                 with torch.no_grad():
                     *_, generated_samples = model(y_cond=cond, generate=True)
                     generated_batches.append(generated_samples)
-                    ground_truth_batches.append(targets)
+                    ground_truth_batches.append(target)
 
             cnt = 0
             for gt_batch, generated_batch in zip(
@@ -273,7 +278,7 @@ def main(args):
 
         if generate:
             print("Running image generation...")
-            targets = val_vis_data["target"].to(device)
+            target = val_vis_data["target"].to(device)
             cond = val_vis_data["cond"].to(device)
             # angle = val_vis_data["angle"].to(device)
 
@@ -282,7 +287,7 @@ def main(args):
             output = torch.cat(
                 (
                     torch.clamp(generated_batch, 0, 1),
-                    torch.unsqueeze(targets, 1),
+                    torch.unsqueeze(target, 1),
                     cond[:, :, :3, ...],
                 ),
                 dim=1,
@@ -354,14 +359,14 @@ def main(args):
                         eval_dict = dict()
 
                         for val_batch in val_loader:
-                            targets = val_batch["target"].to(device)
+                            target = val_batch["target"].to(device)
                             cond = val_batch["cond"].to(device)
                             with torch.no_grad():
                                 *_, generated_samples = model(
                                     y_cond=cond, generate=True
                                 )
                                 generated_batches.append(generated_samples)
-                                ground_truth_batches.append(targets)
+                                ground_truth_batches.append(target)
                             if test_eval:
                                 break
 
@@ -448,17 +453,17 @@ def main(args):
                             print(f"Saved best model at iteration {it}.")
 
                     print("Running image generation...")
-                    targets = val_vis_data["target"].to(device)
+                    target = val_vis_data["target"].to(device)
                     cond = val_vis_data["cond"].to(device)
                     # angle = val_vis_data["angle"].to(device)
 
                     y_t, generated_batch, *_ = model(y_cond=cond, generate=True)
 
-                    # print(generated_batch.shape, targets.shape, cond.shape, sep="\n")
+                    # print(generated_batch.shape, target.shape, cond.shape, sep="\n")
                     output = torch.cat(
                         (
                             torch.clamp(generated_batch, 0, 1),
-                            torch.unsqueeze(targets, 1),
+                            torch.unsqueeze(target, 1),
                             cond[:, :, :3, ...],
                         ),
                         dim=1,
@@ -479,12 +484,12 @@ def main(args):
 
                 t0 = time.perf_counter()
 
-                targets = batch["target"].to(device)
+                target = batch["target"].to(device)
                 cond = batch["cond"].to(device)
 
                 model.train()
                 optimizer.zero_grad()
-                loss = model(y_0=targets, y_cond=cond)
+                loss = model(y_0=target, y_cond=cond)
                 loss.backward()
                 optimizer.step()
 

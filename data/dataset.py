@@ -86,13 +86,9 @@ def create_webdataset(path, mode, start_shard=0, end_shard=12, view_cnt=1):
 
         images = rearrange(images, "v h w c -> v c h w")  # 2 * ... -1
 
-        cond = (
-            np.concatenate(
-                (images[1:], np.repeat(angles[None, ...], view_cnt, axis=0)), axis=1
-            )
-            .squeeze()
-            .astype(np.float32)
-        )
+        cond = np.concatenate(
+            (images[1:], np.repeat(angles[None, ...], view_cnt, axis=0)), axis=1
+        ).astype(np.float32)
 
         result = {
             "target": images[0],

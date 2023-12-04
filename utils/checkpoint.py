@@ -15,11 +15,13 @@ class Checkpoint:
         kwargs: PyTorch modules whose state should be checkpointed
     """
 
-    def __init__(self, checkpoint_dir="./logs", device=None, config=None, **kwargs):
+    def __init__(
+        self, checkpoint_dir="./logs", device=None, rank=None, config=None, **kwargs
+    ):
         self.module_dict = kwargs
         self.device = device
         self.checkpoint_dir = checkpoint_dir
-        if not os.path.exists(checkpoint_dir):
+        if not os.path.exists(checkpoint_dir) and rank == 0:
             os.makedirs(checkpoint_dir)
             config_path = os.path.join(checkpoint_dir, f"config.yaml")
             with open(config_path, "w") as f:
