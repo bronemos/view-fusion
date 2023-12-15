@@ -144,7 +144,7 @@ def main(args):
 
     val_vis_loader = torch.utils.data.DataLoader(
         val_dataset,
-        batch_size=12,
+        batch_size=1,
         worker_init_fn=worker_init_fn,
     )
     train_vis_loader = torch.utils.data.DataLoader(
@@ -194,7 +194,7 @@ def main(args):
         optimizer=optimizer,
     )
 
-    # Try to resume training
+    # try loading existing model
 
     try:
         if os.path.exists(os.path.join(out_dir, f"model.pt")):
@@ -238,9 +238,10 @@ def main(args):
         images_path = os.path.join(tmp_dir, f"images-{it}-{now}")
         ground_truth_path = os.path.join(images_path, "ground-truth")
         generated_path = os.path.join(images_path, "generated")
-        os.makedirs(images_path)
-        os.makedirs(generated_path)
-        os.makedirs(ground_truth_path)
+        if rank == 0:
+            os.makedirs(images_path)
+            os.makedirs(generated_path)
+            os.makedirs(ground_truth_path)
         compute_fid = False
         generate = True
         if compute_fid:
@@ -292,15 +293,17 @@ def main(args):
                 ),
                 dim=1,
             )
-            log_dict["inference_output"] = wandb.Image(
-                make_grid(
-                    rearrange(output, "b s c h w -> (b s) c h w"),
-                    nrow=output.shape[1],
-                    scale_each=True,
-                ),
-                caption="Denoising steps, Target, Input View",
-            )
-        wandb.log(log_dict)
+
+            if args.wandb:
+                log_dict["inference_output"] = wandb.Image(
+                    make_grid(
+                        rearrange(output, "b s c h w -> (b s) c h w"),
+                        nrow=output.shape[1],
+                        scale_each=True,
+                    ),
+                    caption="Denoising steps, Target, Input View",
+                )
+                wandb.log(log_dict)
 
         exit(0)
 
@@ -398,23 +401,23 @@ def main(args):
                         ssims = torch.cat(ssims)
                         psnrs = torch.cat(psnrs)
 
-                        eval_dict["fid_score"] = torch.tensor(
-                            fid.compute_fid(
-                                ground_truth_path,
-                                generated_path,
-                                verbose=False,
-                                use_dataparallel=False,
-                            ),
-                            dtype=torch.float64,
-                            device=device,
-                        )
+                        # eval_dict["fid_score"] = torch.tensor(
+                        #     fid.compute_fid(
+                        #         ground_truth_path,
+                        #         generated_path,
+                        #         verbose=False,
+                        #         use_dataparallel=False,
+                        #     ),
+                        #     dtype=torch.float64,
+                        #     device=device,
+                        # )
                         eval_dict["ssim"] = torch.mean(ssims)
                         eval_dict["psnr"] = torch.mean(psnrs)
 
                         reduced_dict = reduce_dict(eval_dict)
 
-                        fid_score = reduced_dict["fid_score"]
-                        log_dict["fid_score"] = fid_score
+                        # fid_score = reduced_dict["fid_score"]
+                        # log_dict["fid_score"] = fid_score
 
                         ssim = reduced_dict["ssim"]
                         log_dict["ssim"] = ssim
@@ -441,42 +444,45 @@ def main(args):
                                 )
                                 print(f"Saved best PSNR model at iteration {it}.")
 
-                        if fid_score < fid_score_best:
-                            best_metric_cnt += 1
-                            fid_score_best = fid_score
-                            if rank == 0:
-                                checkpoint.save(f"best_model_fid.pt", **checkpoint_dict)
-                                print(f"Saved best FID model at iteration {it}.")
+                        # if fid_score < fid_score_best:
+                        #     best_metric_cnt += 1
+                        #     fid_score_best = fid_score
+                        #     if rank == 0:
+                        #         checkpoint.save(f"best_model_fid.pt", **checkpoint_dict)
+                        #         print(f"Saved best FID model at iteration {it}.")
 
                         if best_metric_cnt == 3 and rank == 0:
                             checkpoint.save(f"best_model_all.pt", **checkpoint_dict)
                             print(f"Saved best model at iteration {it}.")
 
-                    print("Running image generation...")
-                    target = val_vis_data["target"].to(device)
-                    cond = val_vis_data["cond"].to(device)
-                    # angle = val_vis_data["angle"].to(device)
+                    if args.wandb:
+                        print("Running image generation...")
+                        target = val_vis_data["target"].to(device)
+                        cond = val_vis_data["cond"].to(device)
+                        # angle = val_vis_data["angle"].to(device)
 
-                    y_t, generated_batch, *_ = model(y_cond=cond, generate=True)
+                        y_t, generated_batch, *_ = model(y_cond=cond, generate=True)
 
-                    # print(generated_batch.shape, target.shape, cond.shape, sep="\n")
-                    output = torch.cat(
-                        (
-                            torch.clamp(generated_batch, 0, 1),
-                            torch.unsqueeze(target, 1),
-                            cond[:, :, :3, ...],
-                        ),
-                        dim=1,
-                    )
-                    output = torch.nn.utils.rnn.pad_sequence(output, batch_first=True)
-                    log_dict["output"] = wandb.Image(
-                        make_grid(
-                            rearrange(output, "b s c h w -> (b s) c h w"),
-                            nrow=output.shape[1],
-                            scale_each=True,
-                        ),
-                        caption="Denoising steps, Target, Input View",
-                    )
+                        # print(generated_batch.shape, target.shape, cond.shape, sep="\n")
+                        output = torch.cat(
+                            (
+                                torch.clamp(generated_batch, 0, 1),
+                                torch.unsqueeze(target, 1),
+                                cond[:, :, :3, ...],
+                            ),
+                            dim=1,
+                        )
+                        output = torch.nn.utils.rnn.pad_sequence(
+                            output, batch_first=True
+                        )
+                        log_dict["output"] = wandb.Image(
+                            make_grid(
+                                rearrange(output, "b s c h w -> (b s) c h w"),
+                                nrow=output.shape[1],
+                                scale_each=True,
+                            ),
+                            caption="Denoising steps, Target, Input View",
+                        )
 
                 new_lr = lr_scheduler.get_cur_lr(it)
                 for param_group in optimizer.param_groups:

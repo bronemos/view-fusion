@@ -122,14 +122,16 @@ class PaletteViewSynthesis(nn.Module):
         ), "num_timesteps must greater than sample_num"
         sample_inter = self.num_timesteps // sample_num
 
-        y_t = default(y_t, lambda: torch.randn_like(y_cond[:, :1, :3, ...]).squeeze())
+        y_t = default(
+            y_t, lambda: torch.randn_like(y_cond[:, :1, :3, ...]).squeeze(dim=1)
+        )
         ret_arr = y_t
         # for i in tqdm(
         #     reversed(range(0, self.num_timesteps)),
         #     desc="sampling loop time step",
         #     total=self.num_timesteps,
         # ):
-        for i in range(self.num_timesteps):
+        for i in reversed(range(self.num_timesteps)):
             t = torch.full((b,), i, device=y_cond.device, dtype=torch.long)
             y_t = self.p_sample(y_t, t, y_cond=y_cond)
             if i % sample_inter == 0:
