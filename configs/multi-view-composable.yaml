@@ -19,7 +19,7 @@ model:
   denoise_net_params:
     image_size: 64
     in_channel: 8
-    out_channel: 3
+    out_channel: 6
     inner_channel: 64
     res_blocks: 3
     attn_res: [16]
@@ -32,13 +32,14 @@ data:
   target: main.DataModuleFromConfig
   params:
     num_workers: 1
-    batch_size: 192
+    batch_size: 32
     wrap: True
     train:
       target: ldm.data.nmr_sharded.NMRShardedDataset
       params:
         start_shard: 0
         end_shard: 12
+        view_cnt: 6
         path: /scratch/work/spieglb1/datasets/NMR_sharded
         mode: train
 

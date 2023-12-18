@@ -72,7 +72,7 @@ class PaletteViewSynthesis(nn.Module):
     def p_mean_variance(self, y_t, t, clip_denoised: bool, y_cond=None):
         noise_level = extract(self.gammas, t, x_shape=(1, 1)).to(y_t.device)
 
-        bsz, view_cnt = y_cond.shape[:2]
+        b, view_cnt = y_cond.shape[:2]
         y_cond_stacked = rearrange(y_cond, "b v c h w -> (b v) c h w")
 
         y_t_stacked = rearrange(
@@ -83,13 +83,18 @@ class PaletteViewSynthesis(nn.Module):
             torch.stack([noise_level] * view_cnt, dim=1), "b v d -> (b v) d"
         )
 
-        noise_all = self.denoise_fn(
+        denoise_output = self.denoise_fn(
             torch.cat([y_cond_stacked, y_t_stacked], dim=1), noise_level_stacked
         )
-        noise = torch.mean(
-            rearrange(noise_all, "(b v) c h w -> b v c h w", b=bsz, v=view_cnt),
-            dim=1,
+        noise_all, weights = denoise_output[:, :3, ...], denoise_output[:, 3:, ...]
+        weights_normalized = F.softmax(
+            rearrange(weights, "(b v) c h w -> b v c h w", b=b, v=view_cnt), dim=1
         )
+        noise_weighted = (
+            rearrange(noise_all, "(b v) c h w -> b v c h w", b=b, v=view_cnt)
+            * weights_normalized
+        )
+        noise = torch.mean(noise_weighted, dim=1)
 
         y_0_hat = self.predict_start_from_noise(y_t, t=t, noise=noise)
 
@@ -150,9 +155,9 @@ class PaletteViewSynthesis(nn.Module):
         # generate() wrapped in forward for DDP
         if generate:
             return self.generate(y_cond)
-        y_cond = y_cond.squeeze()
+        # y_cond = y_cond.squeeze()
         # sampling from p(gammas)
-        b, *_ = y_0.shape
+        b, view_cnt = y_cond.shape[:2]
         t = torch.randint(1, self.num_timesteps, (b,), device=y_0.device).long()
         gamma_t1 = extract(self.gammas, t - 1, x_shape=(1, 1))
         sqrt_gamma_t2 = extract(self.gammas, t, x_shape=(1, 1))
@@ -166,7 +171,29 @@ class PaletteViewSynthesis(nn.Module):
             y_0=y_0, sample_gammas=sample_gammas.view(-1, 1, 1, 1), noise=noise
         )
 
-        noise_hat = self.denoise_fn(torch.cat([y_cond, y_noisy], dim=1), sample_gammas)
+        y_cond_stacked = rearrange(y_cond, "b v c h w -> (b v) c h w")
+
+        y_noisy_stacked = rearrange(
+            torch.stack([y_noisy] * view_cnt, dim=1), "b v c h w -> (b v) c h w"
+        )
+
+        sample_gammas_stacked = rearrange(
+            torch.stack([sample_gammas] * view_cnt, dim=1), "b v d -> (b v) d"
+        )
+
+        denoise_output = self.denoise_fn(
+            torch.cat([y_cond_stacked, y_noisy_stacked], dim=1), sample_gammas_stacked
+        )
+        noise_all, weights = denoise_output[:, :3, ...], denoise_output[:, 3:, ...]
+        weights_normalized = F.softmax(
+            rearrange(weights, "(b v) c h w -> b v c h w", b=b, v=view_cnt), dim=1
+        )
+        noise_weighted = (
+            rearrange(noise_all, "(b v) c h w -> b v c h w", b=b, v=view_cnt)
+            * weights_normalized
+        )
+        noise_hat = torch.mean(noise_weighted, dim=1)
+
         loss = self.loss_fn(noise, noise_hat)
 
         return loss
