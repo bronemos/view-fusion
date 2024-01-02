@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.optim as optim
+import webdataset as wds
 from torch.nn.parallel import DistributedDataParallel
 from torchvision.utils import make_grid, save_image
 from einops import rearrange
@@ -107,6 +108,8 @@ def main(args):
     # Initialize data loaders
 
     num_workers = config["data"]["params"].get("num_workers", 1)
+    testset_size = config["data"]["params"]["test"]["params"].get("size", 8751)
+    epoch_size = testset_size // (batch_size * world_size)
     print(
         f"Initializing datalaoders, using {num_workers} workers per process for data loading."
     )
@@ -122,7 +125,7 @@ def main(args):
             val_dataset, drop_last=False
         )
 
-    train_loader = torch.utils.data.DataLoader(
+    train_loader = wds.WebLoader(
         train_dataset,
         batch_size=batch_size,
         num_workers=num_workers,
@@ -132,7 +135,7 @@ def main(args):
         persistent_workers=True,
     )
 
-    val_loader = torch.utils.data.DataLoader(
+    val_loader = wds.WebLoader(
         val_dataset,
         batch_size=batch_size,
         num_workers=1,
@@ -140,18 +143,17 @@ def main(args):
         pin_memory=False,
         worker_init_fn=worker_init_fn,
         persistent_workers=True,
-    )
+    ).with_epoch(epoch_size)
 
-    val_vis_loader = torch.utils.data.DataLoader(
+    val_vis_loader = wds.WebLoader(
         val_dataset,
-        batch_size=1,
+        batch_size=12,
         worker_init_fn=worker_init_fn,
     )
-    train_vis_loader = torch.utils.data.DataLoader(
+    train_vis_loader = wds.WebLoader(
         train_dataset,
         batch_size=12,
         worker_init_fn=worker_init_fn,
-        # collate_fn=collate_variable_length,
     )
     val_vis_data = next(iter(val_vis_loader))
     train_vis_data = next(iter(train_vis_loader))
@@ -281,9 +283,17 @@ def main(args):
             print("Running image generation...")
             target = val_vis_data["target"].to(device)
             cond = val_vis_data["cond"].to(device)
+            torch.save(target, os.path.join(out_dir, "target.pt"))
+            torch.save(cond, os.path.join(out_dir, "cond.pt"))
             # angle = val_vis_data["angle"].to(device)
 
-            y_t, generated_batch, *_ = model(y_cond=cond, generate=True)
+            y_t, generated_batch, logit_arr, weight_arr, _ = model(
+                y_cond=cond, generate=True
+            )
+            print(out_dir)
+            torch.save(generated_batch, os.path.join(out_dir, "generated_batch.pt"))
+            torch.save(logit_arr, os.path.join(out_dir, "logit_arr.pt"))
+            torch.save(weight_arr, os.path.join(out_dir, "weight_arr.pt"))
 
             output = torch.cat(
                 (
@@ -361,6 +371,7 @@ def main(args):
                         ground_truth_batches = list()
                         eval_dict = dict()
 
+                        i = 0
                         for val_batch in val_loader:
                             target = val_batch["target"].to(device)
                             cond = val_batch["cond"].to(device)
@@ -370,9 +381,11 @@ def main(args):
                                 )
                                 generated_batches.append(generated_samples)
                                 ground_truth_batches.append(target)
-                            if test_eval:
-                                break
-
+                            print("sample", i)
+                            i += 1
+                            # if test_eval:
+                            #    break
+                        print("completed generation")
                         cnt = 0
                         ssims = list()
                         psnrs = list()
@@ -398,26 +411,30 @@ def main(args):
                                 ssims.append(compute_ssim(generated_batch, gt_batch))
                                 psnrs.append(compute_psnr(generated_batch, gt_batch))
 
+                        print("saved images")
                         ssims = torch.cat(ssims)
                         psnrs = torch.cat(psnrs)
 
-                        # eval_dict["fid_score"] = torch.tensor(
-                        #     fid.compute_fid(
-                        #         ground_truth_path,
-                        #         generated_path,
-                        #         verbose=False,
-                        #         use_dataparallel=False,
-                        #     ),
-                        #     dtype=torch.float64,
-                        #     device=device,
-                        # )
+                        eval_dict["fid_score"] = torch.tensor(
+                            fid.compute_fid(
+                                ground_truth_path,
+                                generated_path,
+                                verbose=False,
+                                use_dataparallel=False,
+                            ),
+                            dtype=torch.float64,
+                            device=device,
+                        )
                         eval_dict["ssim"] = torch.mean(ssims)
                         eval_dict["psnr"] = torch.mean(psnrs)
 
-                        reduced_dict = reduce_dict(eval_dict)
+                        print("computed metrics")
 
-                        # fid_score = reduced_dict["fid_score"]
-                        # log_dict["fid_score"] = fid_score
+                        reduced_dict = reduce_dict(eval_dict)
+                        print("reduced eval dict")
+
+                        fid_score = reduced_dict["fid_score"]
+                        log_dict["fid_score"] = fid_score
 
                         ssim = reduced_dict["ssim"]
                         log_dict["ssim"] = ssim
@@ -444,12 +461,12 @@ def main(args):
                                 )
                                 print(f"Saved best PSNR model at iteration {it}.")
 
-                        # if fid_score < fid_score_best:
-                        #     best_metric_cnt += 1
-                        #     fid_score_best = fid_score
-                        #     if rank == 0:
-                        #         checkpoint.save(f"best_model_fid.pt", **checkpoint_dict)
-                        #         print(f"Saved best FID model at iteration {it}.")
+                        if fid_score < fid_score_best:
+                            best_metric_cnt += 1
+                            fid_score_best = fid_score
+                            if rank == 0:
+                                checkpoint.save(f"best_model_fid.pt", **checkpoint_dict)
+                                print(f"Saved best FID model at iteration {it}.")
 
                         if best_metric_cnt == 3 and rank == 0:
                             checkpoint.save(f"best_model_all.pt", **checkpoint_dict)
@@ -461,7 +478,7 @@ def main(args):
                         cond = val_vis_data["cond"].to(device)
                         # angle = val_vis_data["angle"].to(device)
 
-                        y_t, generated_batch, *_ = model(y_cond=cond, generate=True)
+                        _, generated_batch, *_ = model(y_cond=cond, generate=True)
 
                         # print(generated_batch.shape, target.shape, cond.shape, sep="\n")
                         output = torch.cat(

@@ -86,7 +86,11 @@ class PaletteViewSynthesis(nn.Module):
         denoise_output = self.denoise_fn(
             torch.cat([y_cond_stacked, y_t_stacked], dim=1), noise_level_stacked
         )
-        noise_all, weights = denoise_output[:, :3, ...], denoise_output[:, 3:, ...]
+        noise_all, weights = (
+            denoise_output[:, :3, ...],
+            denoise_output[:, 3:, ...],
+        )
+        logits = rearrange(weights, "(b v) c h w -> b v c h w", b=b, v=view_cnt)
         weights_normalized = F.softmax(
             rearrange(weights, "(b v) c h w -> b v c h w", b=b, v=view_cnt), dim=1
         )
@@ -104,7 +108,7 @@ class PaletteViewSynthesis(nn.Module):
         model_mean, posterior_log_variance = self.q_posterior(
             y_0_hat=y_0_hat, y_t=y_t, t=t
         )
-        return model_mean, posterior_log_variance
+        return model_mean, posterior_log_variance, logits, weights_normalized
 
     def q_sample(self, y_0, sample_gammas, noise=None):
         noise = default(noise, lambda: torch.randn_like(y_0))
@@ -112,11 +116,11 @@ class PaletteViewSynthesis(nn.Module):
 
     @torch.no_grad()
     def p_sample(self, y_t, t, clip_denoised=True, y_cond=None):
-        model_mean, model_log_variance = self.p_mean_variance(
+        model_mean, model_log_variance, logits, weights = self.p_mean_variance(
             y_t=y_t, t=t, clip_denoised=clip_denoised, y_cond=y_cond
         )
         noise = torch.randn_like(y_t) if any(t > 0) else torch.zeros_like(y_t)
-        return model_mean + noise * (0.5 * model_log_variance).exp()
+        return model_mean + noise * (0.5 * model_log_variance).exp(), logits, weights
 
     @torch.no_grad()
     def generate(self, y_cond, y_t=None, sample_num=8):
@@ -130,26 +134,38 @@ class PaletteViewSynthesis(nn.Module):
         y_t = default(
             y_t, lambda: torch.randn_like(y_cond[:, :1, :3, ...]).squeeze(dim=1)
         )
-        ret_arr = y_t
-        # for i in tqdm(
-        #     reversed(range(0, self.num_timesteps)),
-        #     desc="sampling loop time step",
-        #     total=self.num_timesteps,
-        # ):
-        for i in reversed(range(self.num_timesteps)):
+        ret_arr = [
+            y_t,
+        ]
+        weight_arr = list()
+        logit_arr = list()
+        for i in tqdm(
+            reversed(range(0, self.num_timesteps)),
+            desc="sampling loop time step",
+            total=self.num_timesteps,
+        ):
+            # for i in reversed(range(self.num_timesteps)):
             t = torch.full((b,), i, device=y_cond.device, dtype=torch.long)
-            y_t = self.p_sample(y_t, t, y_cond=y_cond)
+            y_t, logits, weights = self.p_sample(y_t, t, y_cond=y_cond)
             if i % sample_inter == 0:
-                ret_arr = torch.cat([ret_arr, y_t], dim=0)
+                # ret_arr = torch.cat([ret_arr, y_t], dim=0)
+                ret_arr.append(y_t)
+                logit_arr.append(logits)
+                weight_arr.append(weights)
+                # weight_arr = torch.cat([weight_arr, weights], dim=0)
 
-        ret_arr = rearrange(
-            ret_arr,
-            "(s b) c h w -> b s c h w",
-            b=b,
-        )
+        ret_arr = torch.stack(ret_arr, dim=1)
+        logit_arr = torch.stack(logit_arr, dim=1)
+        weight_arr = torch.stack(weight_arr, dim=1)
+        # ret_arr = rearrange(
+        #     ret_arr,
+        #     "(b s) c h w -> b s c h w",
+        #     b=b,
+        # )
+        # weight_arr = rearrange(weight_arr, "(s b) c h w -> b s c h w", b=b)
         generated_samples = ret_arr[:, -1, ...]
 
-        return y_t, ret_arr, generated_samples
+        return y_t, ret_arr, logit_arr, weight_arr, generated_samples
 
     def forward(self, y_0=None, y_cond=None, noise=None, generate=False):
         # generate() wrapped in forward for DDP

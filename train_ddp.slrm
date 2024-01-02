@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --time=96:00:00
+#SBATCH --time=120:00:00
 #SBATCH --cpus-per-task=12
 #SBATCH --mem=128G
 #SBATCH --gres=gpu:v100:2
@@ -10,4 +10,4 @@ module -q load anaconda3
 source activate "/scratch/work/spieglb1/.conda_envs/ldm"
 
 
-torchrun --nnodes=1 --nproc_per_node=2  main.py -s /scratch/work/spieglb1/palette-view-synthesis/logs/2023-11-29T21-57-12-multi-view-composable -gpus 0,1 -r -t --wandb
+torchrun --nnodes=1 --nproc_per_node=2  main.py -s /scratch/work/spieglb1/palette-view-synthesis/logs/2023-12-20T17-50-09-multi-view-composable -r -gpus 0,1 -t --wandb

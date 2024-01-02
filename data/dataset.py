@@ -65,10 +65,10 @@ def create_webdataset_metzler(path):
         shardshuffle=True,
     )
 
-    return webdataset.shuffle(100).decode("rgb").map(lambda x: process_sample(x))
+    return webdataset.shuffle(1000).decode("rgb").map(lambda x: process_sample(x))
 
 
-def create_webdataset(path, mode, start_shard=0, end_shard=12, view_cnt=1):
+def create_webdataset(path, mode, start_shard=0, end_shard=12, view_cnt=1, **kwargs):
     def process_sample(sample):
         # view_cnt = np.random.randint(1, 24)
         images_idx = np.random.choice(range(24), view_cnt + 1, replace=False)
@@ -120,4 +120,4 @@ def create_webdataset(path, mode, start_shard=0, end_shard=12, view_cnt=1):
             resampled=True,
         )
 
-    return webdataset.shuffle(100).decode("rgb").map(lambda x: process_sample(x))
+    return webdataset.shuffle(1000).decode("rgb").map(lambda x: process_sample(x))

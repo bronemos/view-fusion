@@ -8,7 +8,7 @@ model:
     beta_schedule:
       train:
         schedule: linear
-        num_timesteps: 2000
+        num_timesteps: 20
         linear_start: 1.0e-06
         linear_end: 0.01
       test:
@@ -32,14 +32,14 @@ data:
   target: main.DataModuleFromConfig
   params:
     num_workers: 1
-    batch_size: 24
+    batch_size: 32
     wrap: True
     train:
       target: ldm.data.nmr_sharded.NMRShardedDataset
       params:
         start_shard: 0
         end_shard: 12
-        view_cnt: 6
+        view_cnt: 23
         path: /scratch/work/spieglb1/datasets/NMR_sharded
         mode: train
 
@@ -48,9 +48,8 @@ data:
       params:
         start_shard: 0
         end_shard: 12
-        view_cnt: 6
+        view_cnt: 23
         path: /scratch/work/spieglb1/datasets/NMR_sharded_10
-        size: 875
         mode: test
 
     validation:
