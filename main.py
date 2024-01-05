@@ -283,14 +283,16 @@ def main(args):
             print("Running image generation...")
             target = val_vis_data["target"].to(device)
             cond = val_vis_data["cond"].to(device)
+            spoof_cond = val_vis_data["spoof_cond"].to(device)
             torch.save(target, os.path.join(out_dir, "target.pt"))
             torch.save(cond, os.path.join(out_dir, "cond.pt"))
+            torch.save(spoof_cond, os.path.join(out_dir, "spoof_cond.pt"))
             # angle = val_vis_data["angle"].to(device)
 
             y_t, generated_batch, logit_arr, weight_arr, _ = model(
                 y_cond=cond, generate=True
             )
-            print(out_dir)
+            # print(out_dir)
             torch.save(generated_batch, os.path.join(out_dir, "generated_batch.pt"))
             torch.save(logit_arr, os.path.join(out_dir, "logit_arr.pt"))
             torch.save(weight_arr, os.path.join(out_dir, "weight_arr.pt"))
@@ -304,6 +306,51 @@ def main(args):
                 dim=1,
             )
 
+            print("Running target spoof...")
+            _, spoof_generated_batch, spoof_logit_arr, spoof_weight_arr, _ = model(
+                y_cond=spoof_cond, generate=True
+            )
+            torch.save(
+                spoof_generated_batch, os.path.join(out_dir, "spoof_generated_batch.pt")
+            )
+            torch.save(spoof_logit_arr, os.path.join(out_dir, "spoof_logit_arr.pt"))
+            torch.save(spoof_weight_arr, os.path.join(out_dir, "spoof_weight_arr.pt"))
+            spoof_output = torch.cat(
+                (
+                    torch.clamp(spoof_generated_batch, 0, 1),
+                    torch.unsqueeze(target, 1),
+                    spoof_cond[:, :, :3, ...],
+                ),
+                dim=1,
+            )
+
+            print("Running variable view count...")
+            variable_output = list()
+            for i in range(1, cond.shape[0]):
+                print(f"Running view count {i}")
+                (
+                    _,
+                    variable_generated_batch,
+                    variable_logit_arr,
+                    variable_weight_arr,
+                    _,
+                ) = model(y_cond=cond[:, :i, ...], generate=True)
+                torch.save(
+                    variable_generated_batch,
+                    os.path.join(out_dir, f"variable_generated_batch_{i}.pt"),
+                )
+                torch.save(
+                    variable_logit_arr,
+                    os.path.join(out_dir, f"variable_logit_arr_{i}.pt"),
+                )
+                torch.save(
+                    variable_weight_arr,
+                    os.path.join(out_dir, f"variable_weight_arr_{i}.pt"),
+                )
+                variable_output.append(variable_generated_batch)
+
+            # TODO implement arbitrary (inbetween) angle test
+
             if args.wandb:
                 log_dict["inference_output"] = wandb.Image(
                     make_grid(
@@ -313,6 +360,26 @@ def main(args):
                     ),
                     caption="Denoising steps, Target, Input View",
                 )
+                log_dict["spoof_output"] = wandb.Image(
+                    make_grid(
+                        rearrange(spoof_output, "b s c h w -> (b s) c h w"),
+                        nrow=spoof_output.shape[1],
+                        scale_each=True,
+                    ),
+                    caption="Denoising steps, Target, Input View",
+                )
+
+                for i, variable_generated_batch in enumerate(variable_output, start=1):
+                    log_dict[f"variable_output_{i}"] = wandb.Image(
+                        make_grid(
+                            rearrange(
+                                variable_generated_batch, "b s c h w -> (b s) c h w"
+                            ),
+                            nrow=output.shape[1],
+                            scale_each=True,
+                        ),
+                        caption="Denoising steps, Target, Input View",
+                    )
                 wandb.log(log_dict)
 
         exit(0)

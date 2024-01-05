@@ -9,4 +9,4 @@ module purge
 module -q load anaconda3
 source activate "/scratch/work/spieglb1/.conda_envs/ldm"
 
-python main.py -c /scratch/work/spieglb1/palette-view-synthesis/configs/multi-view-composable.yaml -gpus 0, -t --wandb
+python main.py -s /scratch/work/spieglb1/palette-view-synthesis/logs/2023-12-27T23-41-58-multi-view-composable -gpus 0, -r -t --wandb

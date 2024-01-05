@@ -89,10 +89,33 @@ def create_webdataset(path, mode, start_shard=0, end_shard=12, view_cnt=1, **kwa
         cond = np.concatenate(
             (images[1:], np.repeat(angles[None, ...], view_cnt, axis=0)), axis=1
         ).astype(np.float32)
+        spoof_cond = np.concatenate(
+            (images[:-1], np.repeat(angles[None, ...], view_cnt, axis=0)), axis=1
+        ).astype(np.float32)
+
+        all_views = [sample[f"{i:04d}.png"] for i in range(24)]
+        all_views = np.stack(all_views, 0).astype(np.float32)
+        all_views = rearrange(all_views, "v h w c -> v c h w")
+        all_views = np.concatenate(
+            (
+                all_views,
+                np.repeat(
+                    angles[
+                        None,
+                        ...,
+                    ],
+                    24,
+                    axis=0,
+                ),
+            ),
+            axis=1,
+        ).astype(np.float32)
 
         result = {
             "target": images[0],
             "cond": cond,
+            "spoof_cond": spoof_cond,
+            "all_views": all_views,
             "view_cnt": view_cnt,
             "angle": images_idx[0] / 24,
             "scene_hash": sample["__key__"],
