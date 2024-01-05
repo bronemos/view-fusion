@@ -441,7 +441,8 @@ def main(args):
                         i = 0
                         for val_batch in val_loader:
                             target = val_batch["target"].to(device)
-                            cond = val_batch["cond"].to(device)
+                            view_idx = torch.randint(2, 24, (1,)).item()
+                            cond = val_batch["all_views"].to(device)[:, 1:view_idx, ...]
                             with torch.no_grad():
                                 *_, generated_samples = model(
                                     y_cond=cond, generate=True
@@ -575,7 +576,8 @@ def main(args):
                 t0 = time.perf_counter()
 
                 target = batch["target"].to(device)
-                cond = batch["cond"].to(device)
+                view_idx = torch.randint(2, 24, (1,)).item()
+                cond = batch["all_views"].to(device)[:, 1:view_idx, ...]
 
                 model.train()
                 optimizer.zero_grad()

@@ -32,7 +32,7 @@ data:
   target: main.DataModuleFromConfig
   params:
     num_workers: 1
-    batch_size: 24
+    batch_size: 16
     wrap: True
     train:
       target: ldm.data.nmr_sharded.NMRShardedDataset

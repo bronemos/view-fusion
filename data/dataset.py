@@ -68,15 +68,13 @@ def create_webdataset_metzler(path):
     return webdataset.shuffle(1000).decode("rgb").map(lambda x: process_sample(x))
 
 
-def create_webdataset(path, mode, start_shard=0, end_shard=12, view_cnt=1, **kwargs):
+def create_webdataset(path, mode, start_shard=0, end_shard=12, **kwargs):
     def process_sample(sample):
-        # view_cnt = np.random.randint(1, 24)
-        images_idx = np.random.choice(range(24), view_cnt + 1, replace=False)
-        # if view_cnt > 1:
-        #    images_idx = np.sort(images_idx)
+        view_cnt = 23
+        images_idx = np.arange(24)
+        np.random.shuffle(images_idx)
         images = [sample[f"{i:04d}.png"] for i in images_idx]
         images = np.stack(images, 0).astype(np.float32)
-        # angle = 2 * np.pi / 24 * (images_idx[1] - images_idx[0])
         angle = 2 * np.pi / 24 * images_idx[0]
         sin_angle = (np.full(images.shape[1:3], np.sin(angle)) + 1) / 2
         cos_angle = (np.full(images.shape[1:3], np.cos(angle)) + 1) / 2
