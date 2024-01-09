@@ -576,12 +576,20 @@ def main(args):
                 t0 = time.perf_counter()
 
                 target = batch["target"].to(device)
-                view_idx = torch.randint(2, 24, (1,)).item()
-                cond = batch["all_views"].to(device)[:, 1:view_idx, ...]
+                print(target.shape[0])
+                view_indices = torch.randint(2, 24, (target.shape[0],))
+                # cond = batch["all_views"].to(device)[:, 1:view_idx, ...]
+                cond = torch.concatenate(
+                    [
+                        batch["all_views"][i, 1:idx]
+                        for i, idx in enumerate(view_indices)
+                    ],
+                    dim=0,
+                ).to(device)
 
                 model.train()
                 optimizer.zero_grad()
-                loss = model(y_0=target, y_cond=cond)
+                loss = model(y_0=target, y_cond=cond, view_indices=view_indices)
                 loss.backward()
                 optimizer.step()
 

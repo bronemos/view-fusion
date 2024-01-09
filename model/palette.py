@@ -167,13 +167,15 @@ class PaletteViewSynthesis(nn.Module):
 
         return y_t, ret_arr, logit_arr, weight_arr, generated_samples
 
-    def forward(self, y_0=None, y_cond=None, noise=None, generate=False):
+    def forward(
+        self, y_0=None, y_cond=None, view_indices=None, noise=None, generate=False
+    ):
         # generate() wrapped in forward for DDP
         if generate:
             return self.generate(y_cond)
         # y_cond = y_cond.squeeze()
         # sampling from p(gammas)
-        b, view_cnt = y_cond.shape[:2]
+        b = y_0.shape[0]
         t = torch.randint(1, self.num_timesteps, (b,), device=y_0.device).long()
         gamma_t1 = extract(self.gammas, t - 1, x_shape=(1, 1))
         sqrt_gamma_t2 = extract(self.gammas, t, x_shape=(1, 1))
@@ -187,28 +189,64 @@ class PaletteViewSynthesis(nn.Module):
             y_0=y_0, sample_gammas=sample_gammas.view(-1, 1, 1, 1), noise=noise
         )
 
-        y_cond_stacked = rearrange(y_cond, "b v c h w -> (b v) c h w")
+        view_delimiters = torch.cumsum(view_indices - 1, 0).tolist()
+        view_delimiters.insert(0, 0)
 
-        y_noisy_stacked = rearrange(
-            torch.stack([y_noisy] * view_cnt, dim=1), "b v c h w -> (b v) c h w"
+        y_noisy_stacked = torch.concatenate(
+            [torch.stack([y_noisy[i]] * n) for i, n in enumerate(view_indices - 1)],
+            dim=0,
         )
+        sample_gammas_stacked = torch.concatenate(
+            [
+                torch.stack([sample_gammas[i]] * n)
+                for i, n in enumerate(view_indices - 1)
+            ],
+            dim=0,
+        )
+        # y_cond_stacked = rearrange(y_cond, "b v c h w -> (b v) c h w")
 
-        sample_gammas_stacked = rearrange(
-            torch.stack([sample_gammas] * view_cnt, dim=1), "b v d -> (b v) d"
-        )
+        # y_noisy_stacked = rearrange(
+        #     torch.stack([y_noisy] * view_cnt, dim=1), "b v c h w -> (b v) c h w"
+        # )
+
+        # sample_gammas_stacked = rearrange(
+        #     torch.stack([sample_gammas] * view_cnt, dim=1), "b v d -> (b v) d"
+        # )
 
         denoise_output = self.denoise_fn(
-            torch.cat([y_cond_stacked, y_noisy_stacked], dim=1), sample_gammas_stacked
+            torch.cat([y_cond, y_noisy_stacked], dim=1), sample_gammas_stacked
         )
         noise_all, weights = denoise_output[:, :3, ...], denoise_output[:, 3:, ...]
-        weights_normalized = F.softmax(
-            rearrange(weights, "(b v) c h w -> b v c h w", b=b, v=view_cnt), dim=1
+
+        weights_padded = torch.nn.utils.rnn.pad_sequence(
+            [
+                weights[idx1:idx2]
+                for idx1, idx2 in zip(view_delimiters[:-1], view_delimiters[1:])
+            ],
+            batch_first=True,
+            padding_value=float("-inf"),
         )
-        noise_weighted = (
-            rearrange(noise_all, "(b v) c h w -> b v c h w", b=b, v=view_cnt)
-            * weights_normalized
+        weights_softmax = F.softmax(weights_padded, dim=1)
+        noise_padded = torch.nn.utils.rnn.pad_sequence(
+            [
+                noise_all[idx1:idx2]
+                for idx1, idx2 in zip(view_delimiters[:-1], view_delimiters[1:])
+            ],
+            batch_first=True,
         )
-        noise_hat = torch.mean(noise_weighted, dim=1)
+        noise_weighted = noise_padded * weights_softmax
+
+        # weights_normalized = F.softmax(
+        #     rearrange(weights, "(b v) c h w -> b v c h w", b=b, v=view_cnt), dim=1
+        # )
+        # noise_weighted = (
+        #     rearrange(noise_all, "(b v) c h w -> b v c h w", b=b, v=view_cnt)
+        #     * weights_normalized
+        # )
+        # noise_hat = torch.mean(noise_weighted, dim=1)
+
+        mask = noise_weighted != 0
+        noise_hat = (noise_weighted * mask).sum(dim=1) / mask.sum(dim=1)
 
         loss = self.loss_fn(noise, noise_hat)
 
