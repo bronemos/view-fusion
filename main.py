@@ -579,12 +579,14 @@ def main(args):
                 t0 = time.perf_counter()
 
                 target = batch["target"].to(device)
-                increment = 5000
+                increment = 2000
                 max_views = min(it // increment + 2, 24)
                 if max_views > 2:
                     view_indices = torch.randint(2, max_views, (target.shape[0],))
                 else:
                     view_indices = torch.full((target.shape[0],), 2)
+
+                # print(view_indices)
                 # view_indices = torch.full((target.shape[0],), 6)
                 # cond = batch["all_views"].to(device)[:, 1:view_idx, ...]
                 cond = torch.concatenate(
@@ -598,6 +600,7 @@ def main(args):
                 model.train()
                 optimizer.zero_grad()
                 loss = model(y_0=target, y_cond=cond, view_indices=view_indices)
+                # print(loss)
                 loss.backward()
                 optimizer.step()
 
