@@ -3,6 +3,7 @@ import os
 import yaml
 import time
 import datetime
+import random
 
 from pathlib import Path
 
@@ -579,19 +580,32 @@ def main(args):
                 t0 = time.perf_counter()
 
                 target = batch["target"].to(device)
-                increment = 2000
-                max_views = min(it // increment + 2, 24)
-                if max_views > 2:
-                    view_indices = torch.randint(2, max_views, (target.shape[0],))
-                else:
-                    view_indices = torch.full((target.shape[0],), 2)
+                # increment = 2000
+                # ascending = False
+                # if ascending:
+                #     max_views = min(it // increment + 2, 24)
+                #     if max_views > 2:
+                #         view_indices = torch.randint(2, max_views, (target.shape[0],))
+                #     else:
+                #         view_indices = torch.full((target.shape[0],), 2)
+
+                # else:
+                #     min_views = max(7 - it // increment, 2)
+                #     if min_views < 7:
+                #         view_indices = torch.randint(min_views, 7, (target.shape[0],))
+                #     else:
+                #         view_indices = torch.full((target.shape[0],), 7)
 
                 # print(view_indices)
                 # view_indices = torch.full((target.shape[0],), 6)
+                view_indices = torch.randint(2, 25, (target.shape[0],))
                 # cond = batch["all_views"].to(device)[:, 1:view_idx, ...]
+                start = 1
+                if random.random() < 0.1:
+                    start = 0
                 cond = torch.concatenate(
                     [
-                        batch["all_views"][i, 1:idx]
+                        batch["all_views"][i, start:idx]
                         for i, idx in enumerate(view_indices)
                     ],
                     dim=0,

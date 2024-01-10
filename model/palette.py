@@ -245,8 +245,9 @@ class PaletteViewSynthesis(nn.Module):
         # )
         # noise_hat = torch.mean(noise_weighted, dim=1)
 
-        mask = noise_weighted != 0
-        noise_hat = (noise_weighted * mask).sum(dim=1) / mask.sum(dim=1)
+        # mask = noise_weighted != 0
+        # noise_hat = (noise_weighted * mask).sum(dim=1) / mask.sum(dim=1)
+        noise_hat = noise_weighted.sum(dim=1)
 
         loss = self.loss_fn(noise, noise_hat)
 
