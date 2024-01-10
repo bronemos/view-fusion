@@ -1,7 +1,7 @@
 model:
   base_learning_rate: 5.0e-05
-  validate_every: 10000
-  validate_from: 100000
+  validate_every: 20000
+  validate_from: 150000
   denoise_net: unet
   log_every: 10
   palette_params:

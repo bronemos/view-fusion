@@ -1,3 +1,4 @@
+import random
 import numpy as np
 import imageio
 import yaml
@@ -90,8 +91,11 @@ def create_webdataset(path, mode, start_shard=0, end_shard=12, **kwargs):
         spoof_cond = np.concatenate(
             (images[:-1], np.repeat(angles[None, ...], view_cnt, axis=0)), axis=1
         ).astype(np.float32)
+        if random.random() < 0.15:
+            cond = spoof_cond
 
-        all_views = [sample[f"{i:04d}.png"] for i in range(24)]
+        np.random.shuffle(images_idx)
+        all_views = [sample[f"{i:04d}.png"] for i in images_idx]
         all_views = np.stack(all_views, 0).astype(np.float32)
         all_views = rearrange(all_views, "v h w c -> v c h w")
         all_views = np.concatenate(

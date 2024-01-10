@@ -391,7 +391,7 @@ def main(args):
         psnr_best = -np.inf
 
         test_eval = args.test_eval
-        compute_metrics = True
+        compute_metrics = False
 
         while True:
             epoch_no += 1
@@ -543,7 +543,8 @@ def main(args):
                     if args.wandb:
                         print("Running image generation...")
                         target = val_vis_data["target"].to(device)
-                        cond = val_vis_data["cond"].to(device)
+                        view_idx = torch.randint(2, 24, (1,)).item()
+                        cond = val_vis_data["all_views"].to(device)[:, 1:view_idx, ...]
                         # angle = val_vis_data["angle"].to(device)
 
                         _, generated_batch, *_ = model(y_cond=cond, generate=True)
@@ -568,6 +569,8 @@ def main(args):
                             ),
                             caption="Denoising steps, Target, Input View",
                         )
+                        wandb.log(log_dict, step=it)
+                        exit(0)
 
                 new_lr = lr_scheduler.get_cur_lr(it)
                 for param_group in optimizer.param_groups:
@@ -576,8 +579,13 @@ def main(args):
                 t0 = time.perf_counter()
 
                 target = batch["target"].to(device)
-                print(target.shape[0])
-                view_indices = torch.randint(2, 24, (target.shape[0],))
+                increment = 5000
+                max_views = min(it // increment + 2, 24)
+                if max_views > 2:
+                    view_indices = torch.randint(2, max_views, (target.shape[0],))
+                else:
+                    view_indices = torch.full((target.shape[0],), 2)
+                # view_indices = torch.full((target.shape[0],), 6)
                 # cond = batch["all_views"].to(device)[:, 1:view_idx, ...]
                 cond = torch.concatenate(
                     [
