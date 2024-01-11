@@ -98,7 +98,7 @@ class PaletteViewSynthesis(nn.Module):
             rearrange(noise_all, "(b v) c h w -> b v c h w", b=b, v=view_cnt)
             * weights_normalized
         )
-        noise = torch.mean(noise_weighted, dim=1)
+        noise = noise_weighted.sum(dim=1)
 
         y_0_hat = self.predict_start_from_noise(y_t, t=t, noise=noise)
 
@@ -203,21 +203,14 @@ class PaletteViewSynthesis(nn.Module):
             ],
             dim=0,
         )
-        # y_cond_stacked = rearrange(y_cond, "b v c h w -> (b v) c h w")
 
-        # y_noisy_stacked = rearrange(
-        #     torch.stack([y_noisy] * view_cnt, dim=1), "b v c h w -> (b v) c h w"
-        # )
-
-        # sample_gammas_stacked = rearrange(
-        #     torch.stack([sample_gammas] * view_cnt, dim=1), "b v d -> (b v) d"
-        # )
-
+        # u-net outputs (v_1 + ... + v_b) c h w; where v_n is cond view count for each sample
         denoise_output = self.denoise_fn(
             torch.cat([y_cond, y_noisy_stacked], dim=1), sample_gammas_stacked
         )
         noise_all, weights = denoise_output[:, :3, ...], denoise_output[:, 3:, ...]
 
+        # weights and noise padded; shape b max(v_1, ... , v_b) c h w
         weights_padded = torch.nn.utils.rnn.pad_sequence(
             [
                 weights[idx1:idx2]
@@ -236,17 +229,6 @@ class PaletteViewSynthesis(nn.Module):
         )
         noise_weighted = noise_padded * weights_softmax
 
-        # weights_normalized = F.softmax(
-        #     rearrange(weights, "(b v) c h w -> b v c h w", b=b, v=view_cnt), dim=1
-        # )
-        # noise_weighted = (
-        #     rearrange(noise_all, "(b v) c h w -> b v c h w", b=b, v=view_cnt)
-        #     * weights_normalized
-        # )
-        # noise_hat = torch.mean(noise_weighted, dim=1)
-
-        # mask = noise_weighted != 0
-        # noise_hat = (noise_weighted * mask).sum(dim=1) / mask.sum(dim=1)
         noise_hat = noise_weighted.sum(dim=1)
 
         loss = self.loss_fn(noise, noise_hat)

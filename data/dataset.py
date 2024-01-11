@@ -94,8 +94,8 @@ def create_webdataset(path, mode, start_shard=0, end_shard=12, **kwargs):
         if random.random() < 0.15:
             cond = spoof_cond
 
-        # if random.random() < 0.15:
-        #     np.random.shuffle(images_idx)
+        if random.random() < 0.1:
+            np.random.shuffle(images_idx)
         all_views = [sample[f"{i:04d}.png"] for i in images_idx]
         all_views = np.stack(all_views, 0).astype(np.float32)
         all_views = rearrange(all_views, "v h w c -> v c h w")

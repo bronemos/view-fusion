@@ -600,12 +600,9 @@ def main(args):
                 # view_indices = torch.full((target.shape[0],), 6)
                 view_indices = torch.randint(2, 25, (target.shape[0],))
                 # cond = batch["all_views"].to(device)[:, 1:view_idx, ...]
-                start = 1
-                if random.random() < 0.1:
-                    start = 0
                 cond = torch.concatenate(
                     [
-                        batch["all_views"][i, start:idx]
+                        batch["all_views"][i, 1:idx]
                         for i, idx in enumerate(view_indices)
                     ],
                     dim=0,
