@@ -69,35 +69,57 @@ class PaletteViewSynthesis(nn.Module):
         )
         return posterior_mean, posterior_log_variance_clipped
 
-    def p_mean_variance(self, y_t, t, clip_denoised: bool, y_cond=None):
+    def p_mean_variance(
+        self,
+        y_t,
+        y_cond,
+        view_count,
+        angle,
+        t,
+        clip_denoised: bool,
+    ):
+        view_delimiters = torch.cumsum(view_count, 0).tolist()
+        view_delimiters.insert(0, 0)
+
         noise_level = extract(self.gammas, t, x_shape=(1, 1)).to(y_t.device)
 
-        b, view_cnt = y_cond.shape[:2]
-        y_cond_stacked = rearrange(y_cond, "b v c h w -> (b v) c h w")
+        # prepare shapes of conditioning, noise, angles and levels;
+        # from b 23 c h w ->  (v_1 + ... + v_b) c h w; where v_n is cond view count for each sample
+        y_cond_stacked = torch.concatenate(
+            [y_cond[i, :idx] for i, idx in enumerate(view_count)],
+            dim=0,
+        ).to(y_cond.device)
 
-        y_t_stacked = rearrange(
-            torch.stack([y_t] * view_cnt, dim=1), "b v c h w -> (b v) c h w"
-        )
-
-        noise_level_stacked = rearrange(
-            torch.stack([noise_level] * view_cnt, dim=1), "b v d -> (b v) d"
-        )
+        y_t_stacked = torch.repeat_interleave(y_t, view_count, dim=0)
+        noise_level_stacked = torch.repeat_interleave(noise_level, view_count, dim=0)
+        angle_stacked = torch.repeat_interleave(angle, view_count, dim=0)
 
         denoise_output = self.denoise_fn(
-            torch.cat([y_cond_stacked, y_t_stacked], dim=1), noise_level_stacked
+            torch.cat([y_cond_stacked, y_t_stacked], dim=1),
+            angle_stacked,
+            noise_level_stacked,
         )
-        noise_all, weights = (
-            denoise_output[:, :3, ...],
-            denoise_output[:, 3:, ...],
+        noise_all, logits = denoise_output[:, :3, ...], denoise_output[:, 3:, ...]
+
+        # weights and noise padded; shape b max(v_1, ... , v_b) c h w
+        logits_padded = torch.nn.utils.rnn.pad_sequence(
+            [
+                logits[idx1:idx2]
+                for idx1, idx2 in zip(view_delimiters[:-1], view_delimiters[1:])
+            ],
+            batch_first=True,
+            padding_value=float("-inf"),
         )
-        logits = rearrange(weights, "(b v) c h w -> b v c h w", b=b, v=view_cnt)
-        weights_normalized = F.softmax(
-            rearrange(weights, "(b v) c h w -> b v c h w", b=b, v=view_cnt), dim=1
+        weights_softmax = F.softmax(logits_padded, dim=1)
+        noise_padded = torch.nn.utils.rnn.pad_sequence(
+            [
+                noise_all[idx1:idx2]
+                for idx1, idx2 in zip(view_delimiters[:-1], view_delimiters[1:])
+            ],
+            batch_first=True,
         )
-        noise_weighted = (
-            rearrange(noise_all, "(b v) c h w -> b v c h w", b=b, v=view_cnt)
-            * weights_normalized
-        )
+        noise_weighted = noise_padded * weights_softmax
+
         noise = noise_weighted.sum(dim=1)
 
         y_0_hat = self.predict_start_from_noise(y_t, t=t, noise=noise)
@@ -108,22 +130,27 @@ class PaletteViewSynthesis(nn.Module):
         model_mean, posterior_log_variance = self.q_posterior(
             y_0_hat=y_0_hat, y_t=y_t, t=t
         )
-        return model_mean, posterior_log_variance, logits, weights_normalized
+        return model_mean, posterior_log_variance, logits, weights_softmax
 
     def q_sample(self, y_0, sample_gammas, noise=None):
         noise = default(noise, lambda: torch.randn_like(y_0))
         return sample_gammas.sqrt() * y_0 + (1 - sample_gammas).sqrt() * noise
 
     @torch.no_grad()
-    def p_sample(self, y_t, t, clip_denoised=True, y_cond=None):
+    def p_sample(self, y_t, y_cond, view_count, angle, t, clip_denoised=True):
         model_mean, model_log_variance, logits, weights = self.p_mean_variance(
-            y_t=y_t, t=t, clip_denoised=clip_denoised, y_cond=y_cond
+            y_t,
+            y_cond,
+            view_count,
+            angle,
+            t,
+            clip_denoised=clip_denoised,
         )
         noise = torch.randn_like(y_t) if any(t > 0) else torch.zeros_like(y_t)
         return model_mean + noise * (0.5 * model_log_variance).exp(), logits, weights
 
     @torch.no_grad()
-    def generate(self, y_cond, y_t=None, sample_num=8):
+    def generate(self, y_cond, view_count, angle, y_t=None, sample_num=8):
         b, *_ = y_cond.shape
 
         assert (
@@ -146,7 +173,7 @@ class PaletteViewSynthesis(nn.Module):
         ):
             # for i in reversed(range(self.num_timesteps)):
             t = torch.full((b,), i, device=y_cond.device, dtype=torch.long)
-            y_t, logits, weights = self.p_sample(y_t, t, y_cond=y_cond)
+            y_t, logits, weights = self.p_sample(y_t, y_cond, view_count, angle, t)
             if i % sample_inter == 0:
                 # ret_arr = torch.cat([ret_arr, y_t], dim=0)
                 ret_arr.append(y_t)
@@ -168,12 +195,18 @@ class PaletteViewSynthesis(nn.Module):
         return y_t, ret_arr, logit_arr, weight_arr, generated_samples
 
     def forward(
-        self, y_0=None, y_cond=None, view_indices=None, noise=None, generate=False
+        self,
+        y_0=None,
+        y_cond=None,
+        view_count=None,
+        angle=0.0,
+        noise=None,
+        generate=False,
     ):
         # generate() wrapped in forward for DDP
         if generate:
-            return self.generate(y_cond)
-        # y_cond = y_cond.squeeze()
+            return self.generate(y_cond, view_count, angle)
+
         # sampling from p(gammas)
         b = y_0.shape[0]
         t = torch.randint(1, self.num_timesteps, (b,), device=y_0.device).long()
@@ -189,24 +222,25 @@ class PaletteViewSynthesis(nn.Module):
             y_0=y_0, sample_gammas=sample_gammas.view(-1, 1, 1, 1), noise=noise
         )
 
-        view_delimiters = torch.cumsum(view_indices - 1, 0).tolist()
+        view_delimiters = torch.cumsum(view_count, 0).tolist()
         view_delimiters.insert(0, 0)
 
-        y_noisy_stacked = torch.concatenate(
-            [torch.stack([y_noisy[i]] * n) for i, n in enumerate(view_indices - 1)],
-            dim=0,
+        # prepare shapes of conditioning, noise, angles and levels;
+        # from b 23 c h w ->  (v_1 + ... + v_b) c h w; where v_n is cond view count for each sample
+        y_cond_stacked = torch.concatenate(
+            [y_cond[i, :upto] for i, upto in enumerate(view_count)], dim=0
+        ).to(y_cond.device)
+        y_noisy_stacked = torch.repeat_interleave(y_noisy, view_count, dim=0)
+        sample_gammas_stacked = torch.repeat_interleave(
+            sample_gammas, view_count, dim=0
         )
-        sample_gammas_stacked = torch.concatenate(
-            [
-                torch.stack([sample_gammas[i]] * n)
-                for i, n in enumerate(view_indices - 1)
-            ],
-            dim=0,
-        )
+        angle_stacked = torch.repeat_interleave(angle, view_count, dim=0)
 
         # u-net outputs (v_1 + ... + v_b) c h w; where v_n is cond view count for each sample
         denoise_output = self.denoise_fn(
-            torch.cat([y_cond, y_noisy_stacked], dim=1), sample_gammas_stacked
+            torch.cat([y_cond_stacked, y_noisy_stacked], dim=1),
+            angle_stacked,
+            sample_gammas_stacked,
         )
         noise_all, weights = denoise_output[:, :3, ...], denoise_output[:, 3:, ...]
 

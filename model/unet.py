@@ -21,15 +21,17 @@ class UNet(nn.Module):
         super().__init__()
 
         if with_noise_level_emb:
-            noise_level_channel = inner_channel
+            noise_angle_channel = inner_channel
+            self.pos_encoding = PositionalEncoding(inner_channel // 2)
             self.noise_level_mlp = nn.Sequential(
-                PositionalEncoding(inner_channel),
+                # PositionalEncoding(inner_channel),
                 nn.Linear(inner_channel, inner_channel * 4),
                 Swish(),
                 nn.Linear(inner_channel * 4, inner_channel),
             )
+            self.noise_level_angle_mlp = nn.Sequential()
         else:
-            noise_level_channel = None
+            noise_angle_channel = None
             self.noise_level_mlp = None
 
         num_mults = len(channel_mults)
@@ -46,7 +48,7 @@ class UNet(nn.Module):
                     ResnetBlocWithAttn(
                         pre_channel,
                         channel_mult,
-                        noise_level_emb_dim=noise_level_channel,
+                        noise_level_emb_dim=noise_angle_channel,
                         norm_groups=norm_groups,
                         dropout=dropout,
                         with_attn=use_attn,
@@ -65,7 +67,7 @@ class UNet(nn.Module):
                 ResnetBlocWithAttn(
                     pre_channel,
                     pre_channel,
-                    noise_level_emb_dim=noise_level_channel,
+                    noise_level_emb_dim=noise_angle_channel,
                     norm_groups=norm_groups,
                     dropout=dropout,
                     with_attn=True,
@@ -73,7 +75,7 @@ class UNet(nn.Module):
                 ResnetBlocWithAttn(
                     pre_channel,
                     pre_channel,
-                    noise_level_emb_dim=noise_level_channel,
+                    noise_level_emb_dim=noise_angle_channel,
                     norm_groups=norm_groups,
                     dropout=dropout,
                     with_attn=False,
@@ -91,7 +93,7 @@ class UNet(nn.Module):
                     ResnetBlocWithAttn(
                         pre_channel + feat_channels.pop(),
                         channel_mult,
-                        noise_level_emb_dim=noise_level_channel,
+                        noise_level_emb_dim=noise_angle_channel,
                         norm_groups=norm_groups,
                         dropout=dropout,
                         with_attn=use_attn,
@@ -108,8 +110,9 @@ class UNet(nn.Module):
             pre_channel, default(out_channel, in_channel), groups=norm_groups
         )
 
-    def forward(self, x, time):
-        t = self.noise_level_mlp(time) if exists(self.noise_level_mlp) else None
+    def forward(self, x, angle, time):
+        t_angle = torch.cat((self.pos_encoding(time), self.pos_encoding(angle)), dim=-1)
+        t = self.noise_level_mlp(t_angle) if exists(self.noise_level_mlp) else None
 
         feats = []
         for layer in self.downs:

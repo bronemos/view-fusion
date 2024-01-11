@@ -442,11 +442,16 @@ def main(args):
                         i = 0
                         for val_batch in val_loader:
                             target = val_batch["target"].to(device)
-                            view_idx = torch.randint(2, 24, (1,)).item()
-                            cond = val_batch["all_views"].to(device)[:, 1:view_idx, ...]
+                            cond = val_batch["cond"].to(device)
+                            view_count = val_batch["view_count"].to(device)
+                            angle = val_batch["angle"].to(device)
+
                             with torch.no_grad():
                                 *_, generated_samples = model(
-                                    y_cond=cond, generate=True
+                                    y_cond=cond,
+                                    view_count=view_count,
+                                    angle=angle,
+                                    generate=True,
                                 )
                                 generated_batches.append(generated_samples)
                                 ground_truth_batches.append(target)
@@ -543,12 +548,18 @@ def main(args):
 
                     if args.wandb:
                         print("Running image generation...")
-                        target = val_vis_data["target"].to(device)
-                        view_idx = torch.randint(2, 24, (1,)).item()
-                        cond = val_vis_data["all_views"].to(device)[:, 1:view_idx, ...]
-                        # angle = val_vis_data["angle"].to(device)
 
-                        _, generated_batch, *_ = model(y_cond=cond, generate=True)
+                        target = val_vis_data["target"].to(device)
+                        cond = val_vis_data["cond"].to(device)
+                        view_count = val_vis_data["view_count"].to(device)
+                        angle = val_vis_data["angle"].to(device)
+
+                        _, generated_batch, *_ = model(
+                            y_cond=cond,
+                            view_count=view_count,
+                            angle=angle,
+                            generate=True,
+                        )
 
                         # print(generated_batch.shape, target.shape, cond.shape, sep="\n")
                         output = torch.cat(
@@ -580,38 +591,15 @@ def main(args):
                 t0 = time.perf_counter()
 
                 target = batch["target"].to(device)
-                # increment = 2000
-                # ascending = False
-                # if ascending:
-                #     max_views = min(it // increment + 2, 24)
-                #     if max_views > 2:
-                #         view_indices = torch.randint(2, max_views, (target.shape[0],))
-                #     else:
-                #         view_indices = torch.full((target.shape[0],), 2)
-
-                # else:
-                #     min_views = max(7 - it // increment, 2)
-                #     if min_views < 7:
-                #         view_indices = torch.randint(min_views, 7, (target.shape[0],))
-                #     else:
-                #         view_indices = torch.full((target.shape[0],), 7)
-
-                # print(view_indices)
-                # view_indices = torch.full((target.shape[0],), 6)
-                view_indices = torch.randint(2, 25, (target.shape[0],))
-                # cond = batch["all_views"].to(device)[:, 1:view_idx, ...]
-                cond = torch.concatenate(
-                    [
-                        batch["all_views"][i, 1:idx]
-                        for i, idx in enumerate(view_indices)
-                    ],
-                    dim=0,
-                ).to(device)
+                cond = batch["cond"].to(device)
+                view_count = batch["view_count"].to(device)
+                angle = batch["angle"].to(device)
 
                 model.train()
                 optimizer.zero_grad()
-                loss = model(y_0=target, y_cond=cond, view_indices=view_indices)
-                # print(loss)
+                loss = model(
+                    y_0=target, y_cond=cond, view_count=view_count, angle=angle
+                )
                 loss.backward()
                 optimizer.step()
 

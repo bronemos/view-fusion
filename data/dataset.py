@@ -1,4 +1,3 @@
-import random
 import numpy as np
 import imageio
 import yaml
@@ -71,56 +70,58 @@ def create_webdataset_metzler(path):
 
 def create_webdataset(path, mode, start_shard=0, end_shard=12, **kwargs):
     def process_sample(sample):
-        view_cnt = 23
+        view_count = np.random.randint(1, 24)
         images_idx = np.arange(24)
         np.random.shuffle(images_idx)
         images = [sample[f"{i:04d}.png"] for i in images_idx]
         images = np.stack(images, 0).astype(np.float32)
-        angle = 2 * np.pi / 24 * images_idx[0]
-        sin_angle = (np.full(images.shape[1:3], np.sin(angle)) + 1) / 2
-        cos_angle = (np.full(images.shape[1:3], np.cos(angle)) + 1) / 2
+        angle = np.asarray(
+            [
+                2 * np.pi / 24 * images_idx[0],
+            ]
+        ).astype(np.float32)
+        # sin_angle = (np.full(images.shape[1:3], np.sin(angle)) + 1) / 2
+        # cos_angle = (np.full(images.shape[1:3], np.cos(angle)) + 1) / 2
 
         # images = np.concatenate((images, sin_angle, cos_angle), axis=0)
-        angles = np.stack((sin_angle, cos_angle), 0).astype(np.float32)
+        # angles = np.stack((sin_angle, cos_angle), 0).astype(np.float32)
 
         images = rearrange(images, "v h w c -> v c h w")  # 2 * ... -1
 
-        cond = np.concatenate(
-            (images[1:], np.repeat(angles[None, ...], view_cnt, axis=0)), axis=1
-        ).astype(np.float32)
-        spoof_cond = np.concatenate(
-            (images[:-1], np.repeat(angles[None, ...], view_cnt, axis=0)), axis=1
-        ).astype(np.float32)
-        if random.random() < 0.15:
-            cond = spoof_cond
+        # cond = np.concatenate(
+        #     (images[1:], np.repeat(angles[None, ...], view_cnt, axis=0)), axis=1
+        # ).astype(np.float32)
+        # spoof_cond = np.concatenate(
+        #     (images[:-1], np.repeat(angles[None, ...], view_cnt, axis=0)), axis=1
+        # ).astype(np.float32)
+        # if random.random() < 0.15:
+        #     cond = spoof_cond
 
-        if random.random() < 0.1:
+        if np.random.random() < 0.1:
             np.random.shuffle(images_idx)
-        all_views = [sample[f"{i:04d}.png"] for i in images_idx]
-        all_views = np.stack(all_views, 0).astype(np.float32)
-        all_views = rearrange(all_views, "v h w c -> v c h w")
-        all_views = np.concatenate(
-            (
-                all_views,
-                np.repeat(
-                    angles[
-                        None,
-                        ...,
-                    ],
-                    24,
-                    axis=0,
-                ),
-            ),
-            axis=1,
-        ).astype(np.float32)
+            images = images[images_idx]
+        # all_views = np.concatenate(
+        #     (
+        #         all_views,
+        #         np.repeat(
+        #             angles[
+        #                 None,
+        #                 ...,
+        #             ],
+        #             24,
+        #             axis=0,
+        #         ),
+        #     ),
+        #     axis=1,
+        # ).astype(np.float32)
 
         result = {
             "target": images[0],
-            "cond": cond,
-            "spoof_cond": spoof_cond,
-            "all_views": all_views,
-            "view_cnt": view_cnt,
-            "angle": images_idx[0] / 24,
+            # "cond": cond,
+            # "spoof_cond": spoof_cond,
+            "cond": images[1:],
+            "view_count": view_count,
+            "angle": angle,
             "scene_hash": sample["__key__"],
         }
 

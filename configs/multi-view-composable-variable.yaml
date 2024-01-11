@@ -18,7 +18,7 @@ model:
         linear_end: 0.09
   denoise_net_params:
     image_size: 64
-    in_channel: 8
+    in_channel: 6
     out_channel: 6
     inner_channel: 64
     res_blocks: 3
@@ -32,7 +32,7 @@ data:
   target: main.DataModuleFromConfig
   params:
     num_workers: 1
-    batch_size: 16
+    batch_size: 12
     wrap: True
     train:
       target: ldm.data.nmr_sharded.NMRShardedDataset
