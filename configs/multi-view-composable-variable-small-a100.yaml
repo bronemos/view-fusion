@@ -32,8 +32,8 @@ data:
   target: main.DataModuleFromConfig
   params:
     num_workers: 1
-    max_views: 23
-    batch_size: 72
+    max_views: 6
+    batch_size: 320
     wrap: True
     train:
       target: ldm.data.nmr_sharded.NMRShardedDataset
@@ -50,8 +50,8 @@ data:
         start_shard: 0
         end_shard: 12
         view_cnt: 6
-        path: /scratch/work/spieglb1/datasets/NMR_sharded_10
-        size: 360
+        path: /scratch/work/spieglb1/datasets/NMR_sharded
+        size: 1600
         mode: test
 
     validation:
@@ -59,5 +59,5 @@ data:
       params:
         start_shard: 0
         end_shard: 12
-        path: /scratch/work/spieglb1/datasets/NMR_sharded_10
+        path: /scratch/work/spieglb1/datasets/NMR_sharded
         mode: val

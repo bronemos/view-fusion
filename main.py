@@ -77,9 +77,11 @@ def main(args):
 
     max_it = config["model"].get("max_it", 1000000)
     validate_every = config["model"].get("validate_every", 5000)
-    validate_from = config["model"].get("validate_from", 50000)
-    checkpoint_every = config["model"].get("checkpoint_every", 10)
-    log_every = config["model"].get("log_every", 10)
+    validate_from = config["model"].get("validate_from", 100000)
+    checkpoint_every = config["model"].get("checkpoint_every", 100)
+    log_every = config["model"].get("log_every", 100)
+
+    max_views = config["data"]["params"]["max_views"]
 
     tmp_dir = os.path.join("/tmp", exp_name)
     print(tmp_dir)
@@ -110,7 +112,7 @@ def main(args):
 
     num_workers = config["data"]["params"].get("num_workers", 1)
     testset_size = config["data"]["params"]["test"]["params"].get("size", 8751)
-    epoch_size = testset_size // (batch_size * world_size)
+    epoch_size = testset_size // batch_size
     print(
         f"Initializing datalaoders, using {num_workers} workers per process for data loading."
     )
@@ -247,6 +249,7 @@ def main(args):
             os.makedirs(ground_truth_path)
         compute_fid = False
         generate = True
+        variable = False
         if compute_fid:
             generated_batches = list()
             ground_truth_batches = list()
@@ -284,71 +287,88 @@ def main(args):
             print("Running image generation...")
             target = val_vis_data["target"].to(device)
             cond = val_vis_data["cond"].to(device)
-            spoof_cond = val_vis_data["spoof_cond"].to(device)
+            # view_count = val_vis_data["view_count"].to(device)
+            view_count = torch.randint(1, max_views + 1, (target.shape[0],)).to(device)
+            angle = val_vis_data["angle"].to(device)
             torch.save(target, os.path.join(out_dir, "target.pt"))
             torch.save(cond, os.path.join(out_dir, "cond.pt"))
-            torch.save(spoof_cond, os.path.join(out_dir, "spoof_cond.pt"))
             # angle = val_vis_data["angle"].to(device)
 
-            y_t, generated_batch, logit_arr, weight_arr, _ = model(
-                y_cond=cond, generate=True
-            )
+            with torch.no_grad():
+                _, generated_batch, logit_arr, weight_arr, _ = model(
+                    y_cond=cond,
+                    view_count=view_count,
+                    angle=angle,
+                    generate=True,
+                )
             # print(out_dir)
             torch.save(generated_batch, os.path.join(out_dir, "generated_batch.pt"))
             torch.save(logit_arr, os.path.join(out_dir, "logit_arr.pt"))
             torch.save(weight_arr, os.path.join(out_dir, "weight_arr.pt"))
 
+            cond_padded = torch.nn.utils.rnn.pad_sequence(
+                [cond[i, :view_idx] for i, view_idx in enumerate(view_count)],
+                batch_first=True,
+            )
+
             output = torch.cat(
                 (
                     torch.clamp(generated_batch, 0, 1),
                     torch.unsqueeze(target, 1),
-                    cond[:, :, :3, ...],
+                    cond_padded,
                 ),
                 dim=1,
             )
 
-            print("Running target spoof...")
-            _, spoof_generated_batch, spoof_logit_arr, spoof_weight_arr, _ = model(
-                y_cond=spoof_cond, generate=True
-            )
-            torch.save(
-                spoof_generated_batch, os.path.join(out_dir, "spoof_generated_batch.pt")
-            )
-            torch.save(spoof_logit_arr, os.path.join(out_dir, "spoof_logit_arr.pt"))
-            torch.save(spoof_weight_arr, os.path.join(out_dir, "spoof_weight_arr.pt"))
-            spoof_output = torch.cat(
-                (
-                    torch.clamp(spoof_generated_batch, 0, 1),
-                    torch.unsqueeze(target, 1),
-                    spoof_cond[:, :, :3, ...],
-                ),
-                dim=1,
-            )
+            # print("Running target spoof...")
+            # _, spoof_generated_batch, spoof_logit_arr, spoof_weight_arr, _ = model(
+            #     y_cond=spoof_cond, generate=True
+            # )
+            # torch.save(
+            #     spoof_generated_batch, os.path.join(out_dir, "spoof_generated_batch.pt")
+            # )
+            # torch.save(spoof_logit_arr, os.path.join(out_dir, "spoof_logit_arr.pt"))
+            # torch.save(spoof_weight_arr, os.path.join(out_dir, "spoof_weight_arr.pt"))
+            # spoof_output = torch.cat(
+            #     (
+            #         torch.clamp(spoof_generated_batch, 0, 1),
+            #         torch.unsqueeze(target, 1),
+            #         spoof_cond[:, :, :3, ...],
+            #     ),
+            #     dim=1,
+            # )
 
-            print("Running variable view count...")
-            variable_output = list()
-            for i in range(1, cond.shape[0]):
-                print(f"Running view count {i}")
-                (
-                    _,
-                    variable_generated_batch,
-                    variable_logit_arr,
-                    variable_weight_arr,
-                    _,
-                ) = model(y_cond=cond[:, :i, ...], generate=True)
-                torch.save(
-                    variable_generated_batch,
-                    os.path.join(out_dir, f"variable_generated_batch_{i}.pt"),
-                )
-                torch.save(
-                    variable_logit_arr,
-                    os.path.join(out_dir, f"variable_logit_arr_{i}.pt"),
-                )
-                torch.save(
-                    variable_weight_arr,
-                    os.path.join(out_dir, f"variable_weight_arr_{i}.pt"),
-                )
-                variable_output.append(variable_generated_batch)
+            if variable:
+                print("Running variable view count...")
+                variable_output = list()
+                for i in range(1, cond.shape[1]):
+                    print(f"Running view count {i}")
+                    variable_count = torch.full_like(view_count, i)
+                    (
+                        _,
+                        variable_generated_batch,
+                        variable_logit_arr,
+                        variable_weight_arr,
+                        _,
+                    ) = model(
+                        y_cond=cond,
+                        view_count=variable_count,
+                        angle=angle,
+                        generate=True,
+                    )
+                    torch.save(
+                        variable_generated_batch,
+                        os.path.join(out_dir, f"variable_generated_batch_{i}.pt"),
+                    )
+                    torch.save(
+                        variable_logit_arr,
+                        os.path.join(out_dir, f"variable_logit_arr_{i}.pt"),
+                    )
+                    torch.save(
+                        variable_weight_arr,
+                        os.path.join(out_dir, f"variable_weight_arr_{i}.pt"),
+                    )
+                    variable_output.append(variable_generated_batch)
 
             # TODO implement arbitrary (inbetween) angle test
 
@@ -361,26 +381,21 @@ def main(args):
                     ),
                     caption="Denoising steps, Target, Input View",
                 )
-                log_dict["spoof_output"] = wandb.Image(
-                    make_grid(
-                        rearrange(spoof_output, "b s c h w -> (b s) c h w"),
-                        nrow=spoof_output.shape[1],
-                        scale_each=True,
-                    ),
-                    caption="Denoising steps, Target, Input View",
-                )
 
-                for i, variable_generated_batch in enumerate(variable_output, start=1):
-                    log_dict[f"variable_output_{i}"] = wandb.Image(
-                        make_grid(
-                            rearrange(
-                                variable_generated_batch, "b s c h w -> (b s) c h w"
+                if variable:
+                    for i, variable_generated_batch in enumerate(
+                        variable_output, start=1
+                    ):
+                        log_dict[f"variable_output_{i}"] = wandb.Image(
+                            make_grid(
+                                rearrange(
+                                    variable_generated_batch, "b s c h w -> (b s) c h w"
+                                ),
+                                nrow=output.shape[1],
+                                scale_each=True,
                             ),
-                            nrow=output.shape[1],
-                            scale_each=True,
-                        ),
-                        caption="Denoising steps, Target, Input View",
-                    )
+                            caption="Denoising steps, Target, Input View",
+                        )
                 wandb.log(log_dict)
 
         exit(0)
@@ -392,7 +407,8 @@ def main(args):
         psnr_best = -np.inf
 
         test_eval = args.test_eval
-        compute_metrics = False
+        compute_metrics = True
+        acc_loss = 0
 
         while True:
             epoch_no += 1
@@ -422,7 +438,7 @@ def main(args):
                 if test_eval or (
                     it >= validate_from
                     and validate_every > 0
-                    and (it % validate_every) == 0
+                    and ((it - validate_from) % validate_every) == 0
                 ):
                     images_path = os.path.join(tmp_dir, f"images-{it}")
                     ground_truth_path = os.path.join(images_path, "ground-truth")
@@ -439,11 +455,13 @@ def main(args):
                         ground_truth_batches = list()
                         eval_dict = dict()
 
-                        i = 0
                         for val_batch in val_loader:
                             target = val_batch["target"].to(device)
                             cond = val_batch["cond"].to(device)
-                            view_count = val_batch["view_count"].to(device)
+                            # view_count = val_batch["view_count"].to(device)
+                            view_count = torch.randint(
+                                1, max_views + 1, (target.shape[0],)
+                            )
                             angle = val_batch["angle"].to(device)
 
                             with torch.no_grad():
@@ -455,8 +473,6 @@ def main(args):
                                 )
                                 generated_batches.append(generated_samples)
                                 ground_truth_batches.append(target)
-                            print("sample", i)
-                            i += 1
                             # if test_eval:
                             #    break
                         print("completed generation")
@@ -551,7 +567,10 @@ def main(args):
 
                         target = val_vis_data["target"].to(device)
                         cond = val_vis_data["cond"].to(device)
-                        view_count = val_vis_data["view_count"].to(device)
+                        # view_count = val_vis_data["view_count"].to(device)
+                        view_count = torch.randint(
+                            1, max_views + 1, (target.shape[0],)
+                        ).to(device)
                         angle = val_vis_data["angle"].to(device)
 
                         _, generated_batch, *_ = model(
@@ -561,18 +580,24 @@ def main(args):
                             generate=True,
                         )
 
+                        cond_padded = torch.nn.utils.rnn.pad_sequence(
+                            [
+                                cond[i, :view_idx]
+                                for i, view_idx in enumerate(view_count)
+                            ],
+                            batch_first=True,
+                        )
+
                         # print(generated_batch.shape, target.shape, cond.shape, sep="\n")
                         output = torch.cat(
                             (
                                 torch.clamp(generated_batch, 0, 1),
                                 torch.unsqueeze(target, 1),
-                                cond[:, :, :3, ...],
+                                cond_padded,
                             ),
                             dim=1,
                         )
-                        output = torch.nn.utils.rnn.pad_sequence(
-                            output, batch_first=True
-                        )
+
                         log_dict["output"] = wandb.Image(
                             make_grid(
                                 rearrange(output, "b s c h w -> (b s) c h w"),
@@ -582,7 +607,6 @@ def main(args):
                             caption="Denoising steps, Target, Input View",
                         )
                         wandb.log(log_dict, step=it)
-                        exit(0)
 
                 new_lr = lr_scheduler.get_cur_lr(it)
                 for param_group in optimizer.param_groups:
@@ -592,7 +616,11 @@ def main(args):
 
                 target = batch["target"].to(device)
                 cond = batch["cond"].to(device)
-                view_count = batch["view_count"].to(device)
+                # view_count = batch["view_count"].to(device)
+                view_count = torch.randint(1, max_views + 1, (target.shape[0],)).to(
+                    device
+                )
+                # view_count = torch.full((target.shape[0],), 6).to(device)
                 angle = batch["angle"].to(device)
 
                 model.train()
@@ -600,6 +628,7 @@ def main(args):
                 loss = model(
                     y_0=target, y_cond=cond, view_count=view_count, angle=angle
                 )
+                acc_loss += loss.item()
                 loss.backward()
                 optimizer.step()
 
@@ -608,7 +637,8 @@ def main(args):
                 if log_every > 0 and it % log_every == 0:
                     log_dict["t"] = time_elapsed
                     log_dict["lr"] = new_lr
-                    log_dict["loss"] = loss.item()
+                    log_dict["loss"] = acc_loss / log_every
+                    acc_loss = 0
 
                 if args.wandb and log_dict:
                     wandb.log(log_dict, step=it)

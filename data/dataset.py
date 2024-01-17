@@ -87,6 +87,7 @@ def create_webdataset(path, mode, start_shard=0, end_shard=12, **kwargs):
         # angles = np.stack((sin_angle, cos_angle), 0).astype(np.float32)
 
         images = rearrange(images, "v h w c -> v c h w")  # 2 * ... -1
+        target = images[0]
 
         # cond = np.concatenate(
         #     (images[1:], np.repeat(angles[None, ...], view_cnt, axis=0)), axis=1
@@ -116,7 +117,7 @@ def create_webdataset(path, mode, start_shard=0, end_shard=12, **kwargs):
         # ).astype(np.float32)
 
         result = {
-            "target": images[0],
+            "target": target,
             # "cond": cond,
             # "spoof_cond": spoof_cond,
             "cond": images[1:],

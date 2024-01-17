@@ -1,8 +1,8 @@
 #!/bin/bash
-#SBATCH --time=48:00:00
+#SBATCH --time=00:05:00
 #SBATCH --cpus-per-task=12
 #SBATCH --mem=128G
-#SBATCH --gres=gpu:v100:1
+#SBATCH --gres=gpu:a100:1
 #SBATCH --output=/scratch/work/spieglb1/palette-view-synthesis/logs/slurm/slurm-%A_%a.out
 
 module purge
