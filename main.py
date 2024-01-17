@@ -620,7 +620,7 @@ def main(args):
                 view_count = torch.randint(1, max_views + 1, (target.shape[0],)).to(
                     device
                 )
-                # view_count = torch.full((target.shape[0],), 6).to(device)
+                # view_count = torch.full((target.shape[0],), max_views).to(device)
                 angle = batch["angle"].to(device)
 
                 model.train()
