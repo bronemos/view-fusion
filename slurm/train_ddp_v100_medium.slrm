@@ -10,4 +10,4 @@ module -q load anaconda3
 source activate "/scratch/work/spieglb1/.conda_envs/ldm"
 
 
-torchrun --nnodes=1 --nproc_per_node=4 --master_port=25679 main.py -c /scratch/work/spieglb1/palette-view-synthesis/configs/multi-view-composable-variable-medium-v100-4.yaml -gpus 0,1,2,3 -t --wandb
+torchrun --nnodes=1 --nproc_per_node=4 --master_port=25679 ../main.py -s /scratch/work/spieglb1/palette-view-synthesis/logs/2024-01-18T06-08-54-multi-view-composable-variable-medium-v100-4 -gpus 0,1,2,3 -t -r --wandb

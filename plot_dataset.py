@@ -3,13 +3,13 @@ import torch
 from torchvision.utils import make_grid, save_image
 from einops import rearrange
 
-from data.dataset import create_webdataset, create_webdataset_metzler
+from data.dataset import create_webdataset_plot
 
 if __name__ == "__main__":
     for shard_idx in range(13):
-        dataset = create_webdataset(
+        dataset = create_webdataset_plot(
             path="/scratch/work/spieglb1/datasets/NMR_sharded",
-            mode="train",
+            mode="test",
             start_shard=shard_idx,
             end_shard=shard_idx,
         )
@@ -23,6 +23,6 @@ if __name__ == "__main__":
             images = torch.cat((images, views), dim=0)
 
     save_image(
-        make_grid(rearrange(images, "b v c h w -> (v b) c h w"), nrow=images.shape[0]),
-        f"output.png",
+        make_grid(rearrange(images, "b v c h w -> (b v) c h w"), nrow=images.shape[1]),
+        f"output.pdf",
     )

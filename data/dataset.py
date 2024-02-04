@@ -149,3 +149,110 @@ def create_webdataset(path, mode, start_shard=0, end_shard=12, **kwargs):
         )
 
     return webdataset.shuffle(1000).decode("rgb").map(lambda x: process_sample(x))
+
+
+def create_webdataset_eval(path, mode, start_shard=0, end_shard=12, **kwargs):
+    def process_sample(sample):
+        view_count = np.random.randint(1, 24)
+        images_idx = np.arange(24)
+        images_ordered = [sample[f"{i:04d}.png"] for i in images_idx]
+        np.random.shuffle(images_idx)
+        images = [sample[f"{i:04d}.png"] for i in images_idx]
+        images = np.stack(images, 0).astype(np.float32)
+        angle = np.asarray(
+            [
+                2 * np.pi / 24 * images_idx[0],
+            ]
+        ).astype(np.float32)
+
+        images = rearrange(images, "v h w c -> v c h w")  # 2 * ... -1
+        target = images[0]
+
+        result = {
+            "target": target,
+            "cond": images[1:],
+            "images": images_ordered,
+            "view_count": view_count,
+            "angle": angle,
+            "scene_hash": sample["__key__"],
+        }
+
+        return result
+
+    def nodesplitter(urls):
+        rank = torch.distributed.get_rank()
+        yield list(urls)[rank]
+
+    if start_shard == end_shard:
+        webdataset = wds.WebDataset(
+            os.path.join(
+                path,
+                f"NMR-equal-{mode}-{start_shard:02d}.tar",
+            ),
+        )
+
+    else:
+        webdataset = wds.WebDataset(
+            os.path.join(
+                path,
+                f"NMR-equal-{mode}-{{{start_shard:02d}..{end_shard:02d}}}.tar",
+            ),
+            nodesplitter=nodesplitter if torch.distributed.is_initialized() else None,
+        )
+
+    return webdataset.decode("rgb").map(lambda x: process_sample(x))
+
+
+def create_webdataset_plot(path, mode, start_shard=0, end_shard=12, **kwargs):
+    def process_sample(sample):
+        view_count = np.random.randint(1, 24)
+        images_idx = np.arange(24)
+        images_ordered = [sample[f"{i:04d}.png"] for i in images_idx]
+        np.random.shuffle(images_idx)
+        images = [sample[f"{i:04d}.png"] for i in images_idx]
+        images = np.stack(images, 0).astype(np.float32)
+        angle = np.asarray(
+            [
+                2 * np.pi / 24 * images_idx[0],
+            ]
+        ).astype(np.float32)
+
+        images = rearrange(images, "v h w c -> v c h w")  # 2 * ... -1
+        target = images[0]
+
+        images_ordered = np.stack(images_ordered, 0).astype(np.float32)
+        images_ordered = rearrange(images_ordered, "v h w c -> v c h w")
+
+        result = {
+            "target": target,
+            "cond": images[1:],
+            "images": images_ordered,
+            "view_count": view_count,
+            "angle": angle,
+            "scene_hash": sample["__key__"],
+        }
+
+        return result
+
+    def nodesplitter(urls):
+        rank = torch.distributed.get_rank()
+        yield list(urls)[rank]
+
+    if start_shard == end_shard:
+        webdataset = wds.WebDataset(
+            os.path.join(
+                path,
+                f"NMR-{mode}-{start_shard:02d}.tar",
+            ),
+        )
+
+    else:
+        webdataset = wds.WebDataset(
+            os.path.join(
+                path,
+                f"NMR-{mode}-{{{start_shard:02d}..{end_shard:02d}}}.tar",
+            ),
+            nodesplitter=nodesplitter if torch.distributed.is_initialized() else None,
+        )
+
+    return webdataset.shuffle(1000).decode("rgb").map(lambda x: process_sample(x))

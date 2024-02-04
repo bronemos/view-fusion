@@ -23,6 +23,7 @@ from utils.schedulers import LrScheduler
 from data.dataset import (
     create_webdataset,
     create_webdataset_metzler,
+    create_webdataset_eval,
 )
 from model.palette import PaletteViewSynthesis
 from model.unet import UNet
@@ -83,7 +84,8 @@ def main(args):
 
     max_views = config["data"]["params"]["max_views"]
 
-    tmp_dir = os.path.join("/tmp", exp_name)
+    # tmp_dir = os.path.join("/tmp", exp_name)
+    tmp_dir = os.path.join(out_dir, f"view_count_test_{max_views}_{now}")
     print(tmp_dir)
 
     if world_size > 0:
@@ -105,7 +107,9 @@ def main(args):
     if is_metzler:
         val_dataset = create_webdataset_metzler("/scratch/work/spieglb1/datasets/")
     else:
-        val_dataset = create_webdataset(**config["data"]["params"]["test"]["params"])
+        val_dataset = create_webdataset_eval(
+            **config["data"]["params"]["test"]["params"],
+        )
     print("Validation set loaded.")
 
     # Initialize data loaders
@@ -146,7 +150,11 @@ def main(args):
         pin_memory=False,
         worker_init_fn=worker_init_fn,
         persistent_workers=True,
-    ).with_epoch(epoch_size)
+    )
+
+    print(
+        batch_size,
+    )
 
     val_vis_loader = wds.WebLoader(
         val_dataset,
@@ -159,7 +167,6 @@ def main(args):
         worker_init_fn=worker_init_fn,
     )
     val_vis_data = next(iter(val_vis_loader))
-    train_vis_data = next(iter(train_vis_loader))
 
     # Initialize model
 
@@ -203,7 +210,7 @@ def main(args):
 
     try:
         if os.path.exists(os.path.join(out_dir, f"model.pt")):
-            load_dict = checkpoint.load(f"model.pt")
+            load_dict = checkpoint.load(f"best_model_psnr.pt")
         else:
             load_dict = checkpoint.load("model.pt")
     except FileNotFoundError:
@@ -235,8 +242,6 @@ def main(args):
                 resume=True,
                 config=config,
             )
-        wandb.define_metric("ssim", summary="max")
-        wandb.define_metric("psnr", summary="max")
 
     if args.inference:
         log_dict = dict()
@@ -405,8 +410,8 @@ def main(args):
     # Training loop
     if args.train:
         fid_score_best = np.inf
-        ssim_best = wandb.run.summary.get("ssim", -np.inf)
-        psnr_best = wandb.run.summary.get("psnr", -np.inf)
+        ssim_best = -np.inf
+        psnr_best = -np.inf
 
         test_eval = args.test_eval
         compute_metrics = True
@@ -456,6 +461,7 @@ def main(args):
                         generated_batches = list()
                         ground_truth_batches = list()
                         eval_dict = dict()
+                        batch_cnt = 1
 
                         for val_batch in val_loader:
                             target = val_batch["target"].to(device)
@@ -463,7 +469,7 @@ def main(args):
                             # view_count = val_batch["view_count"].to(device)
                             view_count = torch.randint(
                                 1, max_views + 1, (target.shape[0],)
-                            )
+                            ).to(device)
                             angle = val_batch["angle"].to(device)
 
                             with torch.no_grad():
@@ -475,8 +481,8 @@ def main(args):
                                 )
                                 generated_batches.append(generated_samples)
                                 ground_truth_batches.append(target)
-                            # if test_eval:
-                            #    break
+                            print(f"completed batch {batch_cnt}")
+                            batch_cnt += 1
                         print("completed generation")
                         torch.distributed.barrier()
                         cnt = 0
@@ -489,16 +495,16 @@ def main(args):
                                 gt_batch, generated_batch
                             ):
                                 # print(gt_sample.shape, generated_sample.shape)
-                                # save_image(
-                                #     gt_sample,
-                                #     os.path.join(
-                                #         ground_truth_path, f"{rank}-{cnt}.png"
-                                #     ),
-                                # )
-                                # save_image(
-                                #     generated_sample,
-                                #     os.path.join(generated_path, f"{rank}-{cnt}.png"),
-                                # )
+                                save_image(
+                                    gt_sample,
+                                    os.path.join(
+                                        ground_truth_path, f"{rank}-{cnt}.png"
+                                    ),
+                                )
+                                save_image(
+                                    generated_sample,
+                                    os.path.join(generated_path, f"{rank}-{cnt}.png"),
+                                )
                                 cnt += 1
 
                                 ssims.append(compute_ssim(generated_batch, gt_batch))
@@ -514,59 +520,30 @@ def main(args):
                         #         generated_path,
                         #         verbose=False,
                         #         use_dataparallel=False,
-                        #         num_workers=1,
                         #     ),
                         #     dtype=torch.float64,
                         #     device=device,
                         # )
-                        eval_dict["ssim"] = torch.mean(ssims)
-                        eval_dict["psnr"] = torch.mean(psnrs)
+                        eval_dict["ssim"] = ssims
+                        eval_dict["psnr"] = psnrs
 
                         print("computed metrics")
 
                         torch.distributed.barrier()
                         reduced_dict = reduce_dict(eval_dict)
-                        torch.distributed.barrier()
                         print("reduced eval dict")
 
                         # fid_score = reduced_dict["fid_score"]
-                        # log_dict["fid_score"] = fid_score
+                        # log_dict["fid_score_full"] = fid_score
 
                         ssim = reduced_dict["ssim"]
-                        log_dict["ssim"] = ssim
+                        log_dict["ssim_full"] = ssim
 
                         psnr = reduced_dict["psnr"]
-                        log_dict["psnr"] = psnr
+                        log_dict["psnr_full"] = psnr
 
-                        best_metric_cnt = 0
-                        if ssim > ssim_best:
-                            best_metric_cnt += 1
-                            ssim_best = ssim
-                            if rank == 0:
-                                checkpoint.save(
-                                    f"best_model_ssim.pt", **checkpoint_dict
-                                )
-                                print(f"Saved best SSIM modle at iteration {it}.")
-
-                        if psnr > psnr_best:
-                            best_metric_cnt += 1
-                            psnr_best = psnr
-                            if rank == 0:
-                                checkpoint.save(
-                                    f"best_model_psnr.pt", **checkpoint_dict
-                                )
-                                print(f"Saved best PSNR model at iteration {it}.")
-
-                        # if fid_score < fid_score_best:
-                        #     best_metric_cnt += 1
-                        #     fid_score_best = fid_score
-                        #     if rank == 0:
-                        #         checkpoint.save(f"best_model_fid.pt", **checkpoint_dict)
-                        #         print(f"Saved best FID model at iteration {it}.")
-
-                        if best_metric_cnt == 2 and rank == 0:
-                            checkpoint.save(f"best_model_all.pt", **checkpoint_dict)
-                            print(f"Saved best model at iteration {it}.")
+                        print(f"PSNR: {psnr}")
+                        print(f"SSIM: {ssim}")
 
                     if args.wandb:
                         print("Running image generation...")
@@ -613,6 +590,9 @@ def main(args):
                             caption="Denoising steps, Target, Input View",
                         )
                         wandb.log(log_dict, step=it)
+
+                    if test_eval:
+                        exit(0)
 
                 new_lr = lr_scheduler.get_cur_lr(it)
                 for param_group in optimizer.param_groups:

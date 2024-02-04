@@ -171,7 +171,7 @@ class PaletteViewSynthesis(nn.Module):
             desc="sampling loop time step",
             total=self.num_timesteps,
         ):
-            # for i in reversed(range(self.num_timesteps)):
+            # for i in reversed(range(0, self.num_timesteps)):
             t = torch.full((b,), i, device=y_cond.device, dtype=torch.long)
             y_t, logits, weights = self.p_sample(y_t, y_cond, view_count, angle, t)
             if i % sample_inter == 0:

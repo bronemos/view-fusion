@@ -7,6 +7,8 @@ import torch
 import torch.distributed as dist
 import numpy as np
 
+from datetime import timedelta
+
 
 def init_ddp():
     """
@@ -18,7 +20,7 @@ def init_ddp():
     except KeyError:
         return 0, 1  # Single GPU run
 
-    dist.init_process_group(backend="nccl")
+    dist.init_process_group(backend="nccl", timeout=timedelta(hours=3))
     print(f"Initialized process {local_rank} / {world_size}")
     torch.cuda.set_device(local_rank)
 
