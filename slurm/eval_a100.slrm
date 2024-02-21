@@ -1,0 +1,13 @@
+#!/bin/bash
+#SBATCH --time=01:30:00
+#SBATCH --cpus-per-task=12
+#SBATCH --mem=128G
+#SBATCH --gres=gpu:a100:4
+#SBATCH --output=/scratch/work/spieglb1/view-fusion/logs/slurm/slurm-%A_%a.out
+
+module purge
+module -q load anaconda3
+source activate "/scratch/work/spieglb1/.conda_envs/ldm"
+
+
+torchrun --nnodes=1 --nproc_per_node=4 --master_port=25679 ../eval.py -s /scratch/work/spieglb1/view-fusion/logs/2024-01-17T15-13-15-multi-view-composable-variable-small-v100-eval-new -g -t -r -e  --wandb
