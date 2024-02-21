@@ -64,13 +64,13 @@ Configurations for various experiments are located in `configs/`.
 To launch training on a single GPU run:
 
 ```
-python main.py -c configs/multi-view-composable-variable-small-v100.yaml -g -t --wandb
+python main.py -c configs/small-v100.yaml -g -t --wandb
 ```
 
 For a distributed setup run:
 
 ```
-torchrun --nnodes=$NUM_NODES --nproc_per_node=$NUM_GPUS main.py -c configs/multi-view-composable-variable-small-v100-4.yaml -g -t --wandb
+torchrun --nnodes=$NUM_NODES --nproc_per_node=$NUM_GPUS main.py -c configs/small-v100-4.yaml -g -t --wandb
 ```
 
 where `$NUM_NODES` and `$NUM_GPUS` can, for instance, be replaced by 1 and 4, respectively. This would correspond to a single-node setup with four V100 GPUs.
