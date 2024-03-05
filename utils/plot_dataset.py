@@ -2,7 +2,7 @@ import torch
 from einops import rearrange
 from torchvision.utils import make_grid, save_image
 
-from data.dataset import create_webdataset_plot
+from data.nmr_dataset import create_webdataset_plot
 
 if __name__ == "__main__":
     for shard_idx in range(13):

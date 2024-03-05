@@ -16,6 +16,8 @@ class ViewFusion(nn.Module):
         self.denoise_fn = denoise_fn
         self.beta_schedule = beta_schedule
         self.loss_fn = F.mse_loss
+        self.weighting_train = True
+        self.weighting_inference = True
 
     def set_new_noise_schedule(self, device=torch.device("cuda"), phase="train"):
         to_torch = partial(torch.tensor, dtype=torch.float32, device=device)
@@ -98,28 +100,39 @@ class ViewFusion(nn.Module):
             angle_stacked,
             noise_level_stacked,
         )
-        noise_all, logits = denoise_output[:, :3, ...], denoise_output[:, 3:, ...]
+        if self.weighting_inference:
+            noise_all, logits = denoise_output[:, :3, ...], denoise_output[:, 3:, ...]
 
-        # weights and noise padded; shape b max(v_1, ... , v_b) c h w
-        logits_padded = torch.nn.utils.rnn.pad_sequence(
-            [
-                logits[idx1:idx2]
-                for idx1, idx2 in zip(view_delimiters[:-1], view_delimiters[1:])
-            ],
-            batch_first=True,
-            padding_value=float("-inf"),
-        )
-        weights_softmax = F.softmax(logits_padded, dim=1)
-        noise_padded = torch.nn.utils.rnn.pad_sequence(
-            [
-                noise_all[idx1:idx2]
-                for idx1, idx2 in zip(view_delimiters[:-1], view_delimiters[1:])
-            ],
-            batch_first=True,
-        )
-        noise_weighted = noise_padded * weights_softmax
+            # weights and noise padded; shape b max(v_1, ... , v_b) c h w
+            logits_padded = torch.nn.utils.rnn.pad_sequence(
+                [
+                    logits[idx1:idx2]
+                    for idx1, idx2 in zip(view_delimiters[:-1], view_delimiters[1:])
+                ],
+                batch_first=True,
+                padding_value=float("-inf"),
+            )
+            weights_softmax = F.softmax(logits_padded, dim=1)
+            noise_padded = torch.nn.utils.rnn.pad_sequence(
+                [
+                    noise_all[idx1:idx2]
+                    for idx1, idx2 in zip(view_delimiters[:-1], view_delimiters[1:])
+                ],
+                batch_first=True,
+            )
+            noise_weighted = noise_padded * weights_softmax
 
-        noise = noise_weighted.sum(dim=1)
+            noise = noise_weighted.sum(dim=1)
+
+        # ablation for when the weights are switched off or not learned
+        else:
+            noise_all = denoise_output[:, :3, ...]
+            noise = torch.Tensor(
+                [
+                    torch.mean(noise_all[idx1:idx2], dim=0)
+                    for idx1, idx2 in zip(view_delimiters[:-1], view_delimiters[1:])
+                ]
+            )
 
         y_0_hat = self.predict_start_from_noise(y_t, t=t, noise=noise)
 
@@ -232,28 +245,39 @@ class ViewFusion(nn.Module):
             angle_stacked,
             sample_gammas_stacked,
         )
-        noise_all, weights = denoise_output[:, :3, ...], denoise_output[:, 3:, ...]
 
-        # weights and noise padded; shape b max(v_1, ... , v_b) c h w
-        weights_padded = torch.nn.utils.rnn.pad_sequence(
-            [
-                weights[idx1:idx2]
-                for idx1, idx2 in zip(view_delimiters[:-1], view_delimiters[1:])
-            ],
-            batch_first=True,
-            padding_value=float("-inf"),
-        )
-        weights_softmax = F.softmax(weights_padded, dim=1)
-        noise_padded = torch.nn.utils.rnn.pad_sequence(
-            [
-                noise_all[idx1:idx2]
-                for idx1, idx2 in zip(view_delimiters[:-1], view_delimiters[1:])
-            ],
-            batch_first=True,
-        )
-        noise_weighted = noise_padded * weights_softmax
+        if self.weighting_train:
+            noise_all, weights = denoise_output[:, :3, ...], denoise_output[:, 3:, ...]
 
-        noise_hat = noise_weighted.sum(dim=1)
+            # weights and noise padded; shape b max(v_1, ... , v_b) c h w
+            weights_padded = torch.nn.utils.rnn.pad_sequence(
+                [
+                    weights[idx1:idx2]
+                    for idx1, idx2 in zip(view_delimiters[:-1], view_delimiters[1:])
+                ],
+                batch_first=True,
+                padding_value=float("-inf"),
+            )
+            weights_softmax = F.softmax(weights_padded, dim=1)
+            noise_padded = torch.nn.utils.rnn.pad_sequence(
+                [
+                    noise_all[idx1:idx2]
+                    for idx1, idx2 in zip(view_delimiters[:-1], view_delimiters[1:])
+                ],
+                batch_first=True,
+            )
+            noise_weighted = noise_padded * weights_softmax
+
+            noise_hat = noise_weighted.sum(dim=1)
+
+        else:
+            noise_all = denoise_output[:, :3, ...]
+            noise_hat = torch.Tensor(
+                [
+                    torch.mean(noise_all[idx1:idx2], dim=0)
+                    for idx1, idx2 in zip(view_delimiters[:-1], view_delimiters[1:])
+                ]
+            )
 
         loss = self.loss_fn(noise, noise_hat)
 

@@ -6,14 +6,14 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.optim as optim
-import wandb
 import webdataset as wds
 import yaml
 from einops import rearrange
 from torch.nn.parallel import DistributedDataParallel
 from torchvision.utils import make_grid
 
-from data.dataset import create_webdataset
+import wandb
+from data.nmr_dataset import create_webdataset
 from model.unet import UNet
 from model.view_fusion import ViewFusion
 from utils.checkpoint import Checkpoint
@@ -80,6 +80,8 @@ class Experiment:
             wandb.define_metric("psnr", summary="max")
 
             self.wandb_enabled = True
+
+            self.relative = True
 
     def __init_model_train(self):
         denoise_net = self.config["model"].get("denoise_net", "unet")
@@ -243,11 +245,19 @@ class Experiment:
                 t0 = time.perf_counter()
 
                 target = batch["target"].to(self.device)
-                cond = batch["cond"].to(self.device)
+                cond = (
+                    batch["cond"].to(self.device)
+                    if not self.relative
+                    else batch["relative_cond"].to(self.device)
+                )
                 view_count = torch.randint(
                     1, self.max_views + 1, (target.shape[0],)
                 ).to(self.device)
-                angle = batch["angle"].to(self.device)
+                angle = (
+                    batch["angle"].to(self.device)
+                    if not self.relative
+                    else batch["relative_angle"].to(self.device)
+                )
 
                 self.model.train()
                 self.optimizer.zero_grad()
@@ -287,9 +297,17 @@ class Experiment:
 
         for val_batch in self.val_loader:
             target = val_batch["target"].to(self.device)
-            cond = val_batch["cond"].to(self.device)
+            cond = (
+                val_batch["cond"].to(self.device)
+                if not self.relative
+                else val_batch["relative_cond"].to(self.device)
+            )
             view_count = torch.randint(1, self.max_views + 1, (target.shape[0],))
-            angle = val_batch["angle"].to(self.device)
+            angle = (
+                val_batch["angle"].to(self.device)
+                if not self.relative
+                else val_batch["relative_angle"]
+            )
 
             with torch.no_grad():
                 *_, generated_samples = self.model(
@@ -352,11 +370,19 @@ class Experiment:
             print("Running image generation...")
 
             target = self.val_vis_data["target"].to(self.device)
-            cond = self.val_vis_data["cond"].to(self.device)
+            cond = (
+                self.val_vis_data["cond"].to(self.device)
+                if not self.relative
+                else self.val_vis_data["relative_cond"].to(self.device)
+            )
             view_count = torch.randint(1, self.max_views + 1, (target.shape[0],)).to(
                 self.device
             )
-            angle = self.val_vis_data["angle"].to(self.device)
+            angle = (
+                self.val_vis_data["angle"].to(self.device)
+                if not self.relative
+                else self.val_vis_data["relative_angle"].to(self.device)
+            )
 
             _, generated_batch, *_ = self.model(
                 y_cond=cond,

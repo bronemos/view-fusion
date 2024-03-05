@@ -13,7 +13,7 @@ from einops import rearrange
 from torch.nn.parallel import DistributedDataParallel
 from torchvision.utils import make_grid, save_image
 
-from data.dataset import (
+from data.nmr_dataset import (
     create_webdataset,
     create_webdataset_metzler,
     create_webdataset_plot,
