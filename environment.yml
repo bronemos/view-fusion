@@ -1,4 +1,4 @@
-name: /scratch/work/spieglb1/.conda_envs/view-fusion
+name: view-fusion
 channels:
   - pytorch
   - nvidia

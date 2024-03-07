@@ -237,6 +237,7 @@ class Experiment:
                     and ((self.it - validate_from) % validate_every) == 0
                 ):
                     self.eval()
+                    self.inference()
 
                 new_lr = self.lr_scheduler.get_cur_lr(self.it)
                 for param_group in self.optimizer.param_groups:

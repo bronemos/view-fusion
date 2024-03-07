@@ -35,8 +35,7 @@ def process_sample(sample, mode="train"):
     ).astype(np.float32)
 
     refernece_images_stacked = np.repeat(images[1][np.newaxis, ...], 24, axis=0)
-    relative_cond_images = np.concatenate((refernece_images_stacked, images))
-    print(relative_cond_images.shape)
+    relative_cond_images = np.concatenate((refernece_images_stacked, images), axis=1)
 
     result = {
         "target": target,
