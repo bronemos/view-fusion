@@ -17,7 +17,7 @@ def get_arg_parser():
     return parser
 
 
-def get_dataset_size(src_dir):
+def get_dataset_size(src_dir, withheld=list()):
     src_zip = zipfile.ZipFile(os.path.join(src_dir, "NMR_Dataset.zip"))
     size_dict = dict()
     for split in ["train", "val", "test"]:
@@ -25,6 +25,8 @@ def get_dataset_size(src_dir):
         split_dict = dict()
 
         for key in metadata.keys():
+            if metadata[key]["name"] in withheld:
+                continue
             base_path = f"NMR_Dataset/{key}"
             metadata[key]["list"] = [
                 f"{base_path}/{dir_name.decode('utf-8')}"
@@ -39,12 +41,17 @@ def get_dataset_size(src_dir):
     return size_dict
 
 
-def shard_dataset(src_dir, size_dict, dest_dir, split="test", percent=100, shard_cnt=4):
+def shard_dataset(src_dir, size_dict, dest_dir, split="test", percent=100, shard_cnt=4, withheld=list()):
     src_zip = zipfile.ZipFile(os.path.join(src_dir, "NMR_Dataset.zip"))
     metadata = yaml.safe_load(src_zip.read("NMR_Dataset/metadata.yaml"))
-    dest_dir = os.path.join(
-        dest_dir, "_".join(("NMR_sharded", str(percent), str(shard_cnt)))
-    )
+    if len(withheld) == 0:
+        dest_dir = os.path.join(
+            dest_dir, "_".join(("NMR_sharded", str(percent), str(shard_cnt)))
+        )
+    else:
+        dest_dir = os.path.join(
+            dest_dir, "_".join(("NMR_sharded_withheld", str(percent), str(shard_cnt)))
+        )
     if not os.path.exists(dest_dir):
         os.makedirs(dest_dir)
     split_dict = size_dict[split]
@@ -64,6 +71,8 @@ def shard_dataset(src_dir, size_dict, dest_dir, split="test", percent=100, shard
         os.path.join(dest_dir, f"NMR-{split}-{shard_idx:02}.tar"), encoder=False
     )
     for key in metadata.keys():
+        if metadata[key]["name"] in withheld:
+                continue
         for dir_name in metadata[key]["list"]:
 
             sample = {"__key__": dir_name.split("/")[-1]}
@@ -84,7 +93,8 @@ def shard_dataset(src_dir, size_dict, dest_dir, split="test", percent=100, shard
 
 
 def main(args):
-    size_dict = get_dataset_size(args.src_dir)
+    withheld = ["car,auto,automobile,machine,motorcar",]
+    size_dict = get_dataset_size(args.src_dir, withheld)
     for split in ["train", "val", "test"]:
         shard_dataset(
             args.src_dir,
@@ -93,6 +103,7 @@ def main(args):
             split,
             args.percent,
             args.shard_count,
+            withheld
         )
 
 
