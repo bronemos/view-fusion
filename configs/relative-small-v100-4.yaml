@@ -4,6 +4,7 @@ model:
   validate_from: 150000
   denoise_net: unet
   log_every: 10
+  relative: true
   view_fusion_params:
     beta_schedule:
       train:

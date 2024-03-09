@@ -16,12 +16,10 @@ model:
         num_timesteps: 1000
         linear_start: 1.0e-04
         linear_end: 0.09
-    weighting_train: false
-    weighting_inference: false
   denoise_net_params:
     image_size: 64
     in_channel: 6
-    out_channel: 3
+    out_channel: 6
     inner_channel: 64
     res_blocks: 3
     attn_res: [16]
@@ -39,14 +37,14 @@ data:
       params:
         start_shard: 0
         end_shard: 3
-        path: ./data/nmr/NMR_sharded_100_4
+        path: ./data/nmr/NMR_sharded_withheld_100_4
         mode: train
 
     test:
       params:
         start_shard: 0
         end_shard: 3
-        path: ./data/nmr/NMR_sharded_100_4
+        path: ./data/nmr/NMR_sharded_withheld_100_4
         size: 448
         mode: test
 
@@ -54,5 +52,5 @@ data:
       params:
         start_shard: 0
         end_shard: 3
-        path: ./data/nmr/NMR_sharded_100_4
+        path: ./data/nmr/NMR_sharded_withheld_100_4
         mode: val

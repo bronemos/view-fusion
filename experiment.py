@@ -81,8 +81,6 @@ class Experiment:
 
             self.wandb_enabled = True
 
-        self.relative = True
-
     def __init_model_train(self):
         denoise_net = self.config["model"].get("denoise_net", "unet")
         if denoise_net == "unet":
@@ -92,6 +90,8 @@ class Experiment:
         self.model = ViewFusion(
             denoise_fn,
             self.config["model"]["view_fusion_params"]["beta_schedule"],
+            self.config["model"]["view_fusion_params"]["weighting_train"],
+            self.config["model"]["view_fusion_params"]["weighting_inference"],
         ).to(self.device)
         self.model.set_new_noise_schedule(device=self.device, phase="train")
 
@@ -134,6 +134,8 @@ class Experiment:
         self.time_elapsed = load_dict.get("t", 0.0)
         self.run_id = load_dict.get("run_id", None)
         self.max_views = self.config["data"]["params"]["max_views"]
+        self.relative = self.config["model"].get("relative", False)
+        print("Relative conditioning:", self.relative)
 
         self.best_metrics = dict()
         self.best_metrics["ssim"] = load_dict.get("ssim", -np.inf)

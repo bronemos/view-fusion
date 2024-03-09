@@ -10,14 +10,27 @@ from tqdm import tqdm
 
 
 class ViewFusion(nn.Module):
-    def __init__(self, denoise_fn, beta_schedule, **kwargs):
+    def __init__(
+        self,
+        denoise_fn,
+        beta_schedule,
+        weighting_train=True,
+        weighting_inference=True,
+        **kwargs
+    ):
         super(ViewFusion, self).__init__(**kwargs)
 
         self.denoise_fn = denoise_fn
         self.beta_schedule = beta_schedule
         self.loss_fn = F.mse_loss
-        self.weighting_train = True
-        self.weighting_inference = True
+        self.weighting_train = weighting_train
+        self.weighting_inference = weighting_inference
+
+        print(
+            "Weighting train and inference:",
+            self.weighting_train,
+            self.weighting_inference,
+        )
 
     def set_new_noise_schedule(self, device=torch.device("cuda"), phase="train"):
         to_torch = partial(torch.tensor, dtype=torch.float32, device=device)
@@ -127,12 +140,12 @@ class ViewFusion(nn.Module):
         # ablation for when the weights are switched off or not learned
         else:
             noise_all = denoise_output[:, :3, ...]
-            noise = torch.Tensor(
+            noise = torch.stack(
                 [
                     torch.mean(noise_all[idx1:idx2], dim=0)
                     for idx1, idx2 in zip(view_delimiters[:-1], view_delimiters[1:])
-                ]
-            )
+                ],
+            ).to(y_cond.device)
 
         y_0_hat = self.predict_start_from_noise(y_t, t=t, noise=noise)
 
@@ -272,12 +285,12 @@ class ViewFusion(nn.Module):
 
         else:
             noise_all = denoise_output[:, :3, ...]
-            noise_hat = torch.Tensor(
+            noise_hat = torch.stack(
                 [
                     torch.mean(noise_all[idx1:idx2], dim=0)
                     for idx1, idx2 in zip(view_delimiters[:-1], view_delimiters[1:])
                 ]
-            )
+            ).to(y_cond.device)
 
         loss = self.loss_fn(noise, noise_hat)
 
