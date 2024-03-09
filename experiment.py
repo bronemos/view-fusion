@@ -81,7 +81,7 @@ class Experiment:
 
             self.wandb_enabled = True
 
-            self.relative = True
+        self.relative = True
 
     def __init_model_train(self):
         denoise_net = self.config["model"].get("denoise_net", "unet")
@@ -393,7 +393,7 @@ class Experiment:
             )
 
             cond_padded = torch.nn.utils.rnn.pad_sequence(
-                [cond[i, :view_idx] for i, view_idx in enumerate(view_count)],
+                [cond[i, :view_idx, 3:] for i, view_idx in enumerate(view_count)],
                 batch_first=True,
             )
 

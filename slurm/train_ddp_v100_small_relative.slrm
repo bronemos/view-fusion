@@ -2,7 +2,7 @@
 #SBATCH --time=120:00:00
 #SBATCH --cpus-per-task=12
 #SBATCH --mem=128G
-#SBATCH --gres=gpu:a100:4
+#SBATCH --gres=gpu:v100:4
 #SBATCH --output=/scratch/work/spieglb1/view-fusion/logs/slurm/slurm-%A_%a.out
 
 module purge
@@ -10,4 +10,4 @@ module -q load anaconda3
 source activate "/scratch/work/spieglb1/.conda_envs/view-fusion"
 
 
-torchrun --nnodes=1 --nproc_per_node=4 --master_port=25680 ../main.py -c /scratch/work/spieglb1/view-fusion/configs/multi-view-composable-variable-medium-a100-4.yaml -g -t --wandb
+torchrun --nnodes=1 --nproc_per_node=4 --master_port=25679 main.py -c /scratch/work/spieglb1/view-fusion/configs/relative-small-v100-4.yaml -g -t --wandb
