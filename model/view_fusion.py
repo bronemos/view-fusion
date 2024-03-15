@@ -146,6 +146,8 @@ class ViewFusion(nn.Module):
                     for idx1, idx2 in zip(view_delimiters[:-1], view_delimiters[1:])
                 ],
             ).to(y_cond.device)
+            logits = None
+            weights_softmax = None
 
         y_0_hat = self.predict_start_from_noise(y_t, t=t, noise=noise)
 
@@ -204,9 +206,10 @@ class ViewFusion(nn.Module):
                 weight_arr.append(weights)
 
         ret_arr = torch.stack(ret_arr, dim=1)
-        logit_arr = torch.stack(logit_arr, dim=1)
-        weight_arr = torch.stack(weight_arr, dim=1)
         generated_samples = ret_arr[:, -1, ...]
+        if self.weighting_inference:
+            logit_arr = torch.stack(logit_arr, dim=1)
+            weight_arr = torch.stack(weight_arr, dim=1)
 
         return y_t, ret_arr, logit_arr, weight_arr, generated_samples
 

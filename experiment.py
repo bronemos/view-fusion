@@ -90,8 +90,8 @@ class Experiment:
         self.model = ViewFusion(
             denoise_fn,
             self.config["model"]["view_fusion_params"]["beta_schedule"],
-            self.config["model"]["view_fusion_params"]["weighting_train"],
-            self.config["model"]["view_fusion_params"]["weighting_inference"],
+            self.config["model"]["view_fusion_params"].get("weighting_train", True),
+            self.config["model"]["view_fusion_params"].get("weighting_inference", True),
         ).to(self.device)
         self.model.set_new_noise_schedule(device=self.device, phase="train")
 
@@ -394,10 +394,16 @@ class Experiment:
                 generate=True,
             )
 
-            cond_padded = torch.nn.utils.rnn.pad_sequence(
-                [cond[i, :view_idx, 3:] for i, view_idx in enumerate(view_count)],
-                batch_first=True,
-            )
+            if self.relative:
+                cond_padded = torch.nn.utils.rnn.pad_sequence(
+                    [cond[i, :view_idx, 3:] for i, view_idx in enumerate(view_count)],
+                    batch_first=True,
+                )
+            else:
+                cond_padded = torch.nn.utils.rnn.pad_sequence(
+                    [cond[i, :view_idx] for i, view_idx in enumerate(view_count)],
+                    batch_first=True,
+                )
 
             output = torch.cat(
                 (

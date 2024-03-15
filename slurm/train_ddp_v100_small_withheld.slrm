@@ -10,4 +10,4 @@ module -q load anaconda3
 source activate "/scratch/work/spieglb1/.conda_envs/view-fusion"
 
 
-torchrun --nnodes=1 --nproc_per_node=4 --master_port=25679 main.py -c /scratch/work/spieglb1/view-fusion/configs/small-v100-4-withheld.yaml -g -t --wandb
+torchrun --nnodes=1 --nproc_per_node=4 --master_port=25679 main.py -s /scratch/work/spieglb1/view-fusion/logs/2024-03-09T18-50-06-small-v100-4-withheld -r -g -t --wandb
