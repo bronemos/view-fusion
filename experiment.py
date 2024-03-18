@@ -206,8 +206,12 @@ class Experiment:
 
         # Overwrite load best metrics from wandb if enabled
         if self.wandb_enabled:
-            self.best_metrics["ssim"] = wandb.run.summary.get("ssim", -np.inf)
-            self.best_metrics["psnr"] = wandb.run.summary.get("psnr", -np.inf)
+            self.best_metrics["ssim"] = wandb.run.summary.get("ssim").get(
+                "max", -np.inf
+            )
+            self.best_metrics["psnr"] = wandb.run.summary.get("psnr").get(
+                "max", -np.inf
+            )
 
         acc_loss = 0
 
