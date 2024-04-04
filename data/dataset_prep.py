@@ -74,7 +74,7 @@ def shard_dataset(src_dir, size_dict, dest_dir, split="test", percent=100, shard
             sample["cameras"] = src_zip.read(f"{dir_name}/cameras.npz")
             tar_sink.write(sample)
             sample_no += 1
-            if sample_no == limit:
+            if (sample_no == limit) and (shard_idx < (shard_cnt - 1)):
                 sample_no = 0
                 shard_idx += 1
                 tar_sink = wds.TarWriter(
