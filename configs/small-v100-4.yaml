@@ -36,21 +36,21 @@ data:
     train:
       params:
         start_shard: 0
-        end_shard: 12
-        path: /scratch/work/spieglb1/datasets/NMR_sharded
+        end_shard: 3
+        path: ./data/nmr/NMR_sharded_100_4
         mode: train
 
     test:
       params:
         start_shard: 0
-        end_shard: 12
-        path: /scratch/work/spieglb1/datasets/NMR_sharded
+        end_shard: 3
+        path: ./data/nmr/NMR_sharded_100_4
         size: 448
         mode: test
 
     validation:
       params:
         start_shard: 0
-        end_shard: 12
-        path: /scratch/work/spieglb1/datasets/NMR_sharded
+        end_shard: 3
+        path: ./data/nmr/NMR_sharded_100_4
         mode: val

@@ -7,7 +7,7 @@
 
 module purge
 module -q load anaconda3
-source activate "/scratch/work/spieglb1/.conda_envs/ldm"
+source activate "/scratch/work/spieglb1/.conda_envs/view-fusion"
 
 
 torchrun --nnodes=1 --nproc_per_node=4 --master_port=25678 ../main.py -c /scratch/work/spieglb1/view-fusion/configs/multi-view-composable-variable-small-a100-4.yaml -g -t --wandb

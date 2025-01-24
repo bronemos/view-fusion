@@ -31,20 +31,20 @@ model:
 data:
   params:
     num_workers: 1
-    max_views: 2
-    batch_size: 336
+    max_views: 6
+    batch_size: 112
     train:
       params:
         start_shard: 0
         end_shard: 3
-        path: ./data/nmr/NMR_sharded_100_4
+        path: ./data/nmr/NMR_sharded_withheld_100_4
         mode: train
 
     test:
       params:
         start_shard: 0
         end_shard: 3
-        path: ./data/nmr/NMR_sharded_100_4
+        path: ./data/nmr/NMR_sharded_withheld_100_4
         size: 448
         mode: test
 
@@ -52,5 +52,5 @@ data:
       params:
         start_shard: 0
         end_shard: 3
-        path: ./data/nmr/NMR_sharded_100_4
+        path: ./data/nmr/NMR_sharded_withheld_100_4
         mode: val
