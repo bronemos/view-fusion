@@ -5,7 +5,7 @@
   <img width="100%" alt="image" src="https://github.com/bronemos/view-fusion/assets/72516979/9f313e8f-be97-4d5b-942e-0ffe862d1374">
 </div>
 <div align="center" width="70%">
-  <sub><strong>Fig. 1. Architecture Overview.</strong> <em>ViewFusion</em> takes an <strong>arbitrary number</strong> of
+  <sub>Figure 1: <strong>Architecture Overview.</strong> <em>ViewFusion</em> takes an <strong>arbitrary number</strong> of
                 <strong>unordered</strong> and <strong>pose-free views</strong> coupled with the noise at timestep
                 <em>t-1</em>. The inputs are denoised in
                 parallel using the U-Net conditioned on timestep <em>t</em> and target viewing angle. The
@@ -15,11 +15,22 @@
                 prediction. Ultimately, after <em>T</em> timesteps, a fully denoised target view is obtained. </sub>
 </div>
 <br>
+<img width="49.7%" alt="image" src="https://github.com/bronemos/view-fusion/assets/72516979/c2d4adbb-0c48-439e-9f25-5275b36b2049">
+<img width="49.7%" alt="image" src="https://github.com/bronemos/view-fusion/assets/72516979/be8b3b3e-06c3-4b68-a33c-b55942019432">
+<div align="center" width="70%">
+  <sub>Figure 2: <strong>Adaptive Weight Shifting.</strong> The model shifts its weighting adaptively based on the most informative input view w.r.t. the desired target output. In the examples, six evenly spaced out views of the object are passed in, depending on the target view the model puts most emphasis on the closest views. </sub>
+</div>
+<br>
+<img alt="image" src="https://github.com/bronemos/view-fusion/assets/72516979/faae6b84-a3fa-4163-ac64-953201c3287a">
+<div align="center" width="70%">
+  <sub>Figure 3: <strong>Autoregressive 3D Consistency.</strong> Our approach is capable of maintaining 3D consistency through autoregressive generation even when primed solely with a single input view. We start by priming the model with a single input view, and incrementally rotate the target viewing direction to produce novel views. During the autoregressive generation, each consecutively generated view is added to the flexible conditioning for producing the next view. </sub>
+</div>
+<br>
 This is the official implementation of 
-"<a href="https://arxiv.org/abs/2402.02906">ViewFusion: Learning Composable Diffusion Models for Novel View Synthesis</a>".
+<a href="https://arxiv.org/abs/2402.02906">ViewFusion: Learning Composable Diffusion Models for Novel View Synthesis</a>.
 <br><br>
 
-```
+```bibtex
 @misc{spiegl2024viewfusion,
       title={ViewFusion: Learning Composable Diffusion Models for Novel View Synthesis},
       author={Bernard Spiegl and Andrea Perin and Stéphane Deny and Alexander Ilin},
@@ -36,14 +47,14 @@ This is the official implementation of
 
 You can install and activate the conda environment by simply running:
 
-```
+```bash
 conda env create -f environment.yml
 conda activate view-fusion
 ```
 
-For ARM-based macOS run:
+For ARM-based macOS (not tested extensively) run:
 
-```
+```bash
 conda env create -f environment_osx.yml
 conda activate view-fusion
 ```
@@ -53,9 +64,11 @@ conda activate view-fusion
 Version of the NMR ShapeNet dataset we use is hosted by [(Niemeyer et al.)](https://github.com/autonomousvision/differentiable_volumetric_rendering). Downloadable [here](https://s3.eu-central-1.amazonaws.com/avg-projects/differentiable_volumetric_rendering/data/NMR_Dataset.zip).<br>
 Please note that our current setup is optimized for use in a cluster computing environment and requires sharding.
 
-To shard the dataset, place the `NMR_Dataset.zip` in `data/nmr/` and run `python data/dataset_prep.py` command. The default sharding will split the dataset into four shards. In order to enable parallelization, the number of shards has to be divisible by the number of GPUs you use.
+To ensure correct placement, you can download the dataset using `fetch_dataset.sh` (in `data/nmr/`).
 
-## Experiments - Work In Progress!
+Afterwards, to shard the dataset, run `python data/dataset_prep.py` command. The default sharding will split the dataset into four shards. In order to enable parallelization, the number of shards has to be divisible by the number of GPUs you use.
+
+## Experiments
 
 Configurations for various experiments are located in `configs/`.
 
@@ -63,27 +76,41 @@ Configurations for various experiments are located in `configs/`.
 
 To launch training on a single GPU run:
 
-```
+```bash
 python main.py -c configs/small-v100.yaml -g -t --wandb
 ```
 
-For a distributed setup run:
+For a distributed training setup run:
 
-```
+```bash
 torchrun --nnodes=$NUM_NODES --nproc_per_node=$NUM_GPUS main.py -c configs/small-v100-4.yaml -g -t --wandb
 ```
 
-where `$NUM_NODES` and `$NUM_GPUS` can, for instance, be replaced by 1 and 4, respectively. This would correspond to a single-node setup with four V100 GPUs.
+where `$NUM_NODES` and `$NUM_GPUS` can, for instance, be replaced by 1 and 4, respectively. This would correspond to a single-node setup with four V100 GPUs. Please note that all of the experiments were run on a single-node setup, multi-node environments have not been tested thoroughly.
 
-(In case you are using Slurm, more example scripts are available in `slurm/`.)
+(In case you are using Slurm, some example scripts are available in `slurm/`.)
 
 ### Inference
 
-Coming soon.
+Inference mode supports a variety of visualization options that can be executed by applying their corresponding flags:
 
-### Eval
+- `-gif` &ensp; produces animated generation around the axis along with the weights as shown in Figure 2.
+- `-ar` &emsp; produces animated autoregressive generation as shown in Figure 3.
+- `-ex` &emsp; performs extrapolation beyond six input views that are given at training time.
 
-Coming soon.
+Pretrained model weights are available [here](https://huggingface.co/bronemos/view-fusion/resolve/main/best_model_all.pt) via HuggingFace. For running the model using provided inference script fetch the weights by running `fetch_checkpoint.sh`.
+
+Inference can be performed on a saved checkpoint by running:
+
+```bash
+python main.py -g -i -s ./logs/pretrained --wandb -gif -ar
+```
+
+which produces gifs as shown in Figure 2 and 3.
+
+<!-- ### Evaluation
+
+Evaluation mode computes PSNR, SSIM and LPIPS metrics for a saved checkpoint. -->
 
 ### Using Only the Model
 
@@ -103,10 +130,19 @@ See paper for full implementation details.
 
 **NB** Training configurations require significant amount of VRAM.<br>
 The model referenced in the paper was trained using `configs/multi-view-composable-variable-small-v100-4.yaml` configuration for 710k steps (approx. 6.5 days) on 4x V100 GPUs, each with 32GB VRAM.<br>
-Pretrained model weights will be made available soon.
 
-## Results
+## Repository Structure
+
+<!-- ## Results
 
 <img width="49.7%" alt="image" src="https://github.com/bronemos/view-fusion/assets/72516979/c2d4adbb-0c48-439e-9f25-5275b36b2049">
 <img width="49.7%" alt="image" src="https://github.com/bronemos/view-fusion/assets/72516979/be8b3b3e-06c3-4b68-a33c-b55942019432">
+<div align="center" width="70%">
+  <sub>Figure 2: <strong>Adaptive Weight Shifting.</strong> The model shifts its weighting adaptively based on the most informative input view w.r.t. the desired target output. In the examples, six evenly spaced out views of the object are passed in, depending on the target view the model puts most emphasis on the closest views. </sub>
+</div>
+<br>
 <img alt="image" src="https://github.com/bronemos/view-fusion/assets/72516979/faae6b84-a3fa-4163-ac64-953201c3287a">
+<div align="center" width="70%">
+  <sub>Figure 3: <strong>Autoregressive 3D Consistency.</strong> Our approach is capable of maintaining 3D consistency through autoregressive generation even when primed solely with a single input view. We start by priming the model with a single input view, and incrementally rotate the target viewing direction to produce novel views. During the autoregressive generation, each consecutively generated view is added to the flexible conditioning for producing the next view. </sub>
+</div>
+<br> -->

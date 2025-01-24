@@ -13,11 +13,7 @@ from einops import rearrange
 from torch.nn.parallel import DistributedDataParallel
 from torchvision.utils import make_grid, save_image
 
-from data.nmr_dataset import (
-    create_webdataset,
-    create_webdataset_metzler,
-    create_webdataset_plot,
-)
+from data.nmr_dataset import create_webdataset
 from model.unet import UNet
 from model.view_fusion import ViewFusion
 from utils.checkpoint import Checkpoint
@@ -110,24 +106,7 @@ def inference(args):
         persistent_workers=True,
     )
 
-    val_vis_data = dict()
-    for shard_idx in range(13):
-        dataset = create_webdataset_plot(
-            path="/scratch/work/spieglb1/datasets/NMR_sharded",
-            mode="test",
-            start_shard=shard_idx,
-            end_shard=shard_idx,
-        )
-        data_loader = torch.utils.data.DataLoader(dataset, batch_size=1)
-
-        visualization_data = next(iter(data_loader))
-        for k, v in visualization_data.items():
-            if isinstance(v, list):
-                continue
-            if k in val_vis_data:
-                val_vis_data[k] = torch.cat((val_vis_data[k], v))
-            else:
-                val_vis_data[k] = v
+    val_vis_data = next(iter(val_loader))
 
     # Initialize model
 
@@ -205,9 +184,9 @@ def inference(args):
     variable = False
     plausible = False
     fill_missing = False
-    autoregressive = False
+    autoregressive = True
     generate = False
-    animate_generation = True
+    animate_generation = False
     extrapolate = False
 
     if generate:
@@ -340,7 +319,7 @@ def inference(args):
         print("Running animation sequence generation...")
         i = 10  # class
         n = 96
-        views = val_vis_data["images"].to(device)
+        views = val_vis_data["all_views"].to(device)
         angles_incremental = torch.as_tensor([2 * np.pi / n * i for i in range(n)]).to(
             device
         )
@@ -436,8 +415,8 @@ def inference(args):
 
     if plausible:
         print("Running plausible image generation...")
-        target = val_vis_data["images"][:, 12:13].to(device)
-        cond = val_vis_data["images"][:, :1].to(device)
+        target = val_vis_data["all_views"][:, 12:13].to(device)
+        cond = val_vis_data["all_views"][:, :1].to(device)
         # view_count = val_vis_data["view_count"].to(device)
         view_count = torch.full((target.shape[0],), 1).to(device)
         # angle = val_vis_data["angle"].to(device)
@@ -486,7 +465,7 @@ def inference(args):
 
     if autoregressive:
         os.makedirs(os.path.join(out_dir, "ar"))
-        all_views = val_vis_data["images"][10:11].to(device)
+        all_views = val_vis_data["all_views"][10:11].to(device)
         cond = all_views[:, :1].to(device)
         angles_incremental = torch.as_tensor(
             [2 * np.pi / 24 * i for i in range(1, 25)]

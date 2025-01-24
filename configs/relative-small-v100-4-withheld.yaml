@@ -1,0 +1,56 @@
+model:
+  base_learning_rate: 5.0e-05
+  validate_every: 20000
+  validate_from: 150000
+  denoise_net: unet
+  log_every: 10
+  view_fusion_params:
+    beta_schedule:
+      train:
+        schedule: linear
+        num_timesteps: 2000
+        linear_start: 1.0e-06
+        linear_end: 0.01
+      test:
+        schedule: linear
+        num_timesteps: 1000
+        linear_start: 1.0e-04
+        linear_end: 0.09
+  denoise_net_params:
+    image_size: 64
+    in_channel: 6
+    out_channel: 6
+    inner_channel: 64
+    res_blocks: 3
+    attn_res: [16]
+    channel_mults:
+      - 1
+      - 2
+      - 3
+      - 5
+data:
+  params:
+    num_workers: 1
+    max_views: 6
+    batch_size: 112
+    train:
+      params:
+        start_shard: 0
+        end_shard: 3
+        path: ./data/nmr/NMR_sharded_withheld_100_4
+        mode: train
+
+    test:
+      params:
+        start_shard: 0
+        end_shard: 3
+        path: ./data/nmr/NMR_sharded_withheld_100_4
+        size: 448
+        mode: test
+
+    validation:
+      params:
+        start_shard: 0
+        end_shard: 3
+        path: ./data/nmr/NMR_sharded_withheld_100_4
+        mode: val

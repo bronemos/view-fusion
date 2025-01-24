@@ -3,6 +3,7 @@ import os
 import time
 from pathlib import Path
 
+import imageio
 import numpy as np
 import torch
 import torch.optim as optim
@@ -25,6 +26,11 @@ from utils.schedulers import LrScheduler
 class Experiment:
     def __init__(self, args):
         # Setup logging directories
+
+        self.args = args
+
+        self.log_dict = dict()
+
         if args.inference or args.resume:
             if args.src is None:
                 raise ValueError("Source directory (-s, --src_dir) must be provided.")
@@ -53,7 +59,7 @@ class Experiment:
 
         args.wandb = args.wandb and self.rank == 0
 
-        self.__init_model_train()
+        self.__init_model()
         self.__init_dataloaders()
 
         self.wandb_enabled = False
@@ -81,7 +87,7 @@ class Experiment:
 
             self.wandb_enabled = True
 
-    def __init_model_train(self):
+    def __init_model(self):
         denoise_net = self.config["model"].get("denoise_net", "unet")
         if denoise_net == "unet":
             denoise_fn = UNet(**self.config["model"]["denoise_net_params"])
@@ -121,12 +127,20 @@ class Experiment:
             optimizer=self.optimizer,
         )
 
-        # Try loading existing model
+        # Try loading existing model - load different model for
+        # training / resuming and inference
+        if self.args.train or self.args.resume:
+            print("Loading latest checkpoint...")
+            checkpoint_name = "model.pt"
+        elif self.args.inference or self.args.eval:
+            print("Loading best checkpoint...")
+            checkpoint_name = "best_model_all.pt"
+
         try:
-            if os.path.exists(os.path.join(self.out_dir, f"model.pt")):
-                load_dict = self.checkpoint.load(f"model.pt")
+            if os.path.exists(os.path.join(self.out_dir, checkpoint_name)):
+                load_dict = self.checkpoint.load(checkpoint_name)
             else:
-                load_dict = self.checkpoint.load("model.pt")
+                load_dict = self.checkpoint.load(checkpoint_name)
         except FileNotFoundError:
             load_dict = dict()
 
@@ -147,38 +161,42 @@ class Experiment:
         else:
             batch_size = self.config["data"]["params"]["batch_size"]
 
-        # Initialize webdatasets
-        print("Loading training set...")
-        train_dataset = create_webdataset(
-            **self.config["data"]["params"]["train"]["params"]
-        )
-        print("Training set loaded.")
+        # Initialize train webdataset and dataloader
+        if self.args.train:
+            print("Loading training set...")
+            train_dataset = create_webdataset(
+                **self.config["data"]["params"]["train"]["params"]
+            )
+            print("Training set loaded.")
 
+            num_workers = self.config["data"]["params"].get("num_workers", 1)
+            print(
+                f"Initializing datalaoders, using {num_workers} workers per process for data loading."
+            )
+
+            if isinstance(train_dataset, torch.utils.data.IterableDataset):
+                assert num_workers == 1
+
+            self.train_loader = wds.WebLoader(
+                train_dataset,
+                batch_size=batch_size,
+                num_workers=num_workers,
+                pin_memory=True,
+                worker_init_fn=worker_init_fn,
+                persistent_workers=True,
+            )
+
+        # Initialize val / test webdataset and dataloaders (test dataset is used both
+        # for validating and test, as the benchmarks are perofmed solely on the test set
+        # throughout)
         print("Loading validation set...")
         val_dataset = create_webdataset(
             **self.config["data"]["params"]["test"]["params"]
         )
         print("Validation set loaded.")
 
-        # Initialize dataloaders
-        num_workers = self.config["data"]["params"].get("num_workers", 1)
         testset_size = self.config["data"]["params"]["test"]["params"].get("size", 8751)
         epoch_size = testset_size // batch_size
-        print(
-            f"Initializing datalaoders, using {num_workers} workers per process for data loading."
-        )
-
-        if isinstance(train_dataset, torch.utils.data.IterableDataset):
-            assert num_workers == 1
-
-        self.train_loader = wds.WebLoader(
-            train_dataset,
-            batch_size=batch_size,
-            num_workers=num_workers,
-            pin_memory=True,
-            worker_init_fn=worker_init_fn,
-            persistent_workers=True,
-        )
 
         self.val_loader = wds.WebLoader(
             val_dataset,
@@ -219,7 +237,6 @@ class Experiment:
         while True:
             for batch in self.train_loader:
                 self.it += 1
-                self.log_dict = dict()
 
                 if self.rank == 0:
                     self.checkpoint_dict = {
@@ -352,28 +369,34 @@ class Experiment:
         self.log_dict["ssim"] = reduced_dict["ssim"]
         self.log_dict["psnr"] = reduced_dict["psnr"]
 
-        # Save best metric models
-        best_metric_cnt = 0
-        if self.log_dict["ssim"] > self.best_metrics["ssim"]:
-            best_metric_cnt += 1
-            self.best_metrics["ssim"] = self.log_dict["ssim"]
-            if self.rank == 0:
-                self.checkpoint.save(f"best_model_ssim.pt", **self.checkpoint_dict)
-                print(f"Saved best SSIM modle at iteration {self.it}.")
+        # Save best metric models if currently training
+        if self.args.train:
+            best_metric_cnt = 0
+            if self.log_dict["ssim"] > self.best_metrics["ssim"]:
+                best_metric_cnt += 1
+                self.best_metrics["ssim"] = self.log_dict["ssim"]
+                if self.rank == 0:
+                    self.checkpoint.save(f"best_model_ssim.pt", **self.checkpoint_dict)
+                    print(f"Saved best SSIM modle at iteration {self.it}.")
 
-        if self.log_dict["psnr"] > self.best_metrics["psnr"]:
-            best_metric_cnt += 1
-            self.best_metrics["psnr"] = self.log_dict["psnr"]
-            if self.rank == 0:
-                self.checkpoint.save(f"best_model_psnr.pt", **self.checkpoint_dict)
-                print(f"Saved best PSNR model at iteration {self.it}.")
+            if self.log_dict["psnr"] > self.best_metrics["psnr"]:
+                best_metric_cnt += 1
+                self.best_metrics["psnr"] = self.log_dict["psnr"]
+                if self.rank == 0:
+                    self.checkpoint.save(f"best_model_psnr.pt", **self.checkpoint_dict)
+                    print(f"Saved best PSNR model at iteration {self.it}.")
 
-        if best_metric_cnt == 2 and self.rank == 0:
-            self.checkpoint.save(f"best_model_all.pt", **self.checkpoint_dict)
-            print(f"Saved best model at iteration {self.it}.")
+            if best_metric_cnt == 2 and self.rank == 0:
+                self.checkpoint.save(f"best_model_all.pt", **self.checkpoint_dict)
+                print(f"Saved best model at iteration {self.it}.")
 
     def inference(self):
-        if self.wandb_enabled:
+        variable = False
+        plausible = False
+        fill_missing = False
+        generate = False
+
+        if self.args.train:
             print("Running image generation...")
 
             target = self.val_vis_data["target"].to(self.device)
@@ -418,12 +441,250 @@ class Experiment:
                 dim=1,
             )
 
-            self.log_dict["output"] = wandb.Image(
-                make_grid(
-                    rearrange(output, "b s c h w -> (b s) c h w"),
-                    nrow=output.shape[1],
-                    scale_each=True,
-                ),
-                caption="Denoising steps, Target, Input View",
+            if self.wandb_enabled:
+                self.log_dict["output"] = wandb.Image(
+                    make_grid(
+                        rearrange(output, "b s c h w -> (b s) c h w"),
+                        nrow=output.shape[1],
+                        scale_each=True,
+                    ),
+                    caption="Denoising steps, Target, Input View",
+                )
+
+            else:
+                # TODO save locally
+                pass
+
+        elif self.args.inference:
+            if self.args.extrapolate:
+                self.__extrapolate()
+
+            if self.args.autoregressive:
+                self.__autoregressive()
+
+            if self.args.generate_gifs:
+                self.__generate_gif()
+
+        # save everything to wandb if enabled
+        if self.wandb_enabled:
+            wandb.log(self.log_dict)  # step=self.it)
+
+    def __extrapolate(self):
+        print("Running extrapolate image generation...")
+        target = self.val_vis_data["target"].to(self.device)
+        cond = self.val_vis_data["cond"].to(self.device)
+        # view_count = val_vis_data["view_count"].to(device)
+        view_count = torch.randint(self.max_views + 1, 24, (target.shape[0],)).to(
+            self.device
+        )
+        angle = self.val_vis_data["angle"].to(self.device)
+
+        with torch.no_grad():
+            _, generated_batch, logit_arr, weight_arr, _ = self.model(
+                y_cond=cond,
+                view_count=view_count,
+                angle=angle,
+                generate=True,
             )
-            wandb.log(self.log_dict, step=self.it)
+
+        cond_padded = torch.nn.utils.rnn.pad_sequence(
+            [cond[i, :view_idx] for i, view_idx in enumerate(view_count)],
+            batch_first=True,
+        )
+
+        output = torch.cat(
+            (
+                torch.clamp(generated_batch, 0, 1),
+                torch.unsqueeze(target, 1),
+                cond_padded,
+            ),
+            dim=1,
+        )
+
+        self.log_dict["extrapolate"] = make_grid(
+            rearrange(output, "b s c h w -> (b s) c h w"),
+            nrow=output.shape[1],
+            scale_each=True,
+        )
+
+        return make_grid(
+            rearrange(output, "b s c h w -> (b s) c h w"),
+            nrow=output.shape[1],
+            scale_each=True,
+        )
+
+    def __autoregressive(self):
+        # os.makedirs(os.path.join(out_dir, "ar"))
+        all_views = self.val_vis_data["all_views"][10:11].to(self.device)
+        cond = all_views[:, :1].to(self.device)
+        angles_incremental = torch.as_tensor(
+            [2 * np.pi / 24 * i for i in range(1, 25)]
+        ).to(self.device)
+        # torch.save(
+        #     all_views,
+        #     os.path.join(out_dir, "ar", f"all_views.pt"),
+        # )
+        # torch.save(
+        #     cond,
+        #     os.path.join(out_dir, "ar", f"cond_0.pt"),
+        # )
+
+        cond_list = list()
+        sample_list = list()
+
+        for count, angle in enumerate(angles_incremental, start=1):
+            print(f"Conditioning count and sample number: {count}")
+            cond_list.append(cond[0])
+            view_count = torch.full((cond.shape[0],), count).to(self.device)
+            angle = torch.full((cond.shape[0], 1), angle).to(self.device)
+            *_, generated_samples = self.model(
+                y_cond=cond, view_count=view_count, angle=angle, generate=True
+            )
+            cond = torch.cat((cond, generated_samples[:, None, ...]), dim=1)
+            sample_list.append(generated_samples)
+
+            # torch.save(
+            #     cond,
+            #     os.path.join(out_dir, "ar", f"cond_{count}.pt"),
+            # )
+            # torch.save(
+            #     generated_samples,
+            #     os.path.join(out_dir, "ar", f"samples_{count}.pt"),
+            # )
+
+        print(len(cond_list))
+        conds_padded = torch.clamp(
+            torch.nn.utils.rnn.pad_sequence(
+                cond_list, batch_first=True, padding_value=1.0
+            ),
+            0,
+            1,
+        )
+        samples = torch.clamp(torch.stack(sample_list), 0, 1)
+
+        joint = [
+            torch.cat((cond, sample)) for sample, cond in zip(samples, conds_padded)
+        ]
+        print(joint[0].shape)
+        ar_frames = [
+            (make_grid(sample, nrow=25).cpu() * 255).to(torch.uint8) for sample in joint
+        ]
+
+        if self.wandb_enabled:
+            print(ar_frames[0].shape)
+            self.log_dict[f"autoregressive_single"] = wandb.Image(ar_frames[0])
+            self.log_dict[f"autoregressive_animated"] = wandb.Video(
+                np.stack(ar_frames), format="gif"
+            )
+
+    def __generate_gif(self):
+        print("Running animation sequence generation...")
+        i = 10  # class
+        n = 24
+        views = self.val_vis_data["all_views"].to(self.device)
+        angles_incremental = torch.as_tensor([2 * np.pi / n * i for i in range(n)]).to(
+            self.device
+        )
+        target = torch.repeat_interleave(views[i], n // 24, dim=0)
+        cond_views = torch.stack([views[i, ::4]] * target.shape[0], dim=0)
+        view_counts = torch.as_tensor(
+            [cond_views.shape[1] for _ in range(target.shape[0])],
+        ).to(self.device)
+
+        _, generated_batch, logit_arr, weight_arr, _ = self.model(
+            y_cond=cond_views,
+            angle=angles_incremental.unsqueeze(1),
+            view_count=view_counts,
+            generate=True,
+        )
+
+        # mask = (
+        #     torch.stack(
+        #         [torch.stack([target] * weight_arr.shape[2], dim=1)]
+        #         * weight_arr.shape[1],
+        #         dim=1,
+        #     )
+        #     != 1.0
+        # )
+        # weight_masked = weight_arr * mask
+
+        frames = []
+        for i in range(n):
+            target_grid = torch.cat(
+                [
+                    target[i, ...][None, ...],
+                ]
+                * (cond_views.shape[1] + 1)
+            )[None, ...]
+            view_weights = torch.cat(
+                (weight_arr[i, ...], cond_views[i][None, ...]), dim=0
+            )
+            view_weights = torch.cat(
+                (
+                    view_weights,
+                    torch.clamp(generated_batch[i, ...][:, None, ...], 0, 1),
+                ),
+                dim=1,
+            )
+            view_weights = torch.cat((view_weights, target_grid))
+            view_weights = make_grid(
+                rearrange(view_weights, "s v c h w -> (v s) c h w"),
+                nrow=view_weights.shape[0],
+                # scale_each=True,
+                pad_value=0.9,
+            )
+            # view_weights = rearrange(view_weights, "c h w -> h w c")
+            frames.append((view_weights.cpu() * 255).to(torch.uint8))
+
+        if self.wandb_enabled:
+            self.log_dict[f"weights_animated"] = wandb.Video(
+                np.stack(frames), format="gif"
+            )
+
+        else:
+            imageio.mimsave(
+                os.path.join(self.out_dir, "output_fast.gif"),
+                frames,
+                "GIF",
+                duration=0.1,
+            )
+
+        # frames = []
+        # for i in range(n):
+        #     target_grid = torch.cat(
+        #         [
+        #             target[i, ...][None, ...],
+        #         ]
+        #         * (cond_views.shape[1] + 1)
+        #     )[None, ...]
+        #     view_weights = torch.cat(
+        #         (weight_masked[i, ...], cond_views[i][None, ...]), dim=0
+        #     )
+        #     view_weights = torch.cat(
+        #         (
+        #             view_weights,
+        #             torch.clamp(generated_batch[i, ...][:, None, ...], 0, 1),
+        #         ),
+        #         dim=1,
+        #     )
+        #     view_weights = torch.cat((view_weights, target_grid))
+        #     view_weights = make_grid(
+        #         rearrange(view_weights, "s v c h w -> (v s) c h w"),
+        #         nrow=view_weights.shape[0],
+        #         scale_each=True,
+        #     )
+        #     # view_weights = rearrange(view_weights, "c h w -> h w c")
+        #     frames.append(view_weights.cpu())
+
+        # if self.wandb_enabled:
+        #     self.log_dict[f"output_masked_fast"] = wandb.Video(
+        #         np.stack(frames), format="gif"
+        #     )
+
+        # else:
+        #     imageio.mimsave(
+        #         os.path.join(self.out_dir, "output_masked_fast.gif"),
+        #         frames,
+        #         "GIF",
+        #         duration=0.1,
+        #     )

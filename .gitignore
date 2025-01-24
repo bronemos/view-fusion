@@ -161,7 +161,8 @@ cython_debug/
 
 .vscode
 wandb
-logs
+/logs/*
+!/logs/pretrained/
 *.pt
 /data/nmr
 /data/co3d

@@ -195,7 +195,7 @@ class ViewFusion(nn.Module):
         logit_arr = list()
         for i in tqdm(
             reversed(range(0, self.num_timesteps)),
-            desc="sampling loop time step",
+            desc="Sampling loop time step",
             total=self.num_timesteps,
         ):
             t = torch.full((b,), i, device=y_cond.device, dtype=torch.long)

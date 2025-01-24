@@ -2,6 +2,7 @@
 
 import argparse
 import os
+import warnings
 import zipfile
 
 import webdataset as wds
@@ -41,7 +42,15 @@ def get_dataset_size(src_dir, withheld=list()):
     return size_dict
 
 
-def shard_dataset(src_dir, size_dict, dest_dir, split="test", percent=100, shard_cnt=4, withheld=list()):
+def shard_dataset(
+    src_dir,
+    size_dict,
+    dest_dir,
+    split="test",
+    percent=100,
+    shard_cnt=4,
+    withheld=list(),
+):
     src_zip = zipfile.ZipFile(os.path.join(src_dir, "NMR_Dataset.zip"))
     metadata = yaml.safe_load(src_zip.read("NMR_Dataset/metadata.yaml"))
     if len(withheld) == 0:
@@ -72,10 +81,10 @@ def shard_dataset(src_dir, size_dict, dest_dir, split="test", percent=100, shard
     )
     for key in metadata.keys():
         if metadata[key]["name"] in withheld:
-                continue
+            continue
         for dir_name in metadata[key]["list"]:
 
-            sample = {"__key__": dir_name.split("/")[-1]}
+            sample = {"__key__": f"{dir_name.split('/')[-2]}-{dir_name.split('/')[-1]}"}
             for i in range(24):
                 fname = f"{i:04}.png"
                 sample[fname] = src_zip.read(f"{dir_name}/image/{fname}")
@@ -91,9 +100,18 @@ def shard_dataset(src_dir, size_dict, dest_dir, split="test", percent=100, shard
                     encoder=False,
                 )
 
+                if shard_idx >= shard_cnt:
+                    warnings.warn(
+                        """Number of dataset samples not divisible with shard count. 
+                        Overflowing additional samples into a new shard of uneven 
+                        value."""
+                    )
+
 
 def main(args):
-    withheld = ["car,auto,automobile,machine,motorcar",]
+    withheld = [
+        # "car,auto,automobile,machine,motorcar",
+    ]
     size_dict = get_dataset_size(args.src_dir, withheld)
     for split in ["train", "val", "test"]:
         shard_dataset(
@@ -103,7 +121,7 @@ def main(args):
             split,
             args.percent,
             args.shard_count,
-            withheld
+            withheld,
         )
 
 
