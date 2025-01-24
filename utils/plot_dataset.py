@@ -1,3 +1,5 @@
+# obsolete
+
 import torch
 from einops import rearrange
 from torchvision.utils import make_grid, save_image

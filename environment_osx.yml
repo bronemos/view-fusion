@@ -248,4 +248,3 @@ dependencies:
   - zfp=1.0.0=h313beb8_0
   - zlib=1.2.13=h5a0b063_0
   - zstd=1.5.5=hd90d995_0
-prefix: /Users/spieglb1/miniconda3/envs/view-fusion

@@ -64,13 +64,19 @@ conda activate view-fusion
 Version of the NMR ShapeNet dataset we use is hosted by [(Niemeyer et al.)](https://github.com/autonomousvision/differentiable_volumetric_rendering). Downloadable [here](https://s3.eu-central-1.amazonaws.com/avg-projects/differentiable_volumetric_rendering/data/NMR_Dataset.zip).<br>
 Please note that our current setup is optimized for use in a cluster computing environment and requires sharding.
 
-To ensure correct placement, you can download the dataset using `fetch_dataset.sh` (in `data/nmr/`).
+To ensure correct placement (in `data/nmr/`), you can download the dataset using `fetch_dataset.sh`.
 
-Afterwards, to shard the dataset, run `python data/dataset_prep.py` command. The default sharding will split the dataset into four shards. In order to enable parallelization, the number of shards has to be divisible by the number of GPUs you use.
+Afterwards, to shard the dataset, run
+
+```
+python data/dataset_prep.py
+```
+
+The default sharding will split the dataset into four shards. In order to enable parallelization, the number of shards has to be divisible by the number of GPUs you use.
 
 ## Experiments
 
-Configurations for various experiments are located in `configs/`.
+Configurations for various experiments can be found in `configs/`.
 
 ### Training
 
@@ -106,11 +112,9 @@ Inference can be performed on a saved checkpoint by running:
 python main.py -g -i -s ./logs/pretrained --wandb -gif -ar
 ```
 
-which produces gifs as shown in Figure 2 and 3.
+which produces GIFs as shown in Figure 2 and 3. The outputs are saved to Weights & Biases.
 
-<!-- ### Evaluation
-
-Evaluation mode computes PSNR, SSIM and LPIPS metrics for a saved checkpoint. -->
+The setup draws random samples from validation visualisation dataloader.
 
 ### Using Only the Model
 
@@ -132,6 +136,44 @@ See paper for full implementation details.
 The model referenced in the paper was trained using `configs/multi-view-composable-variable-small-v100-4.yaml` configuration for 710k steps (approx. 6.5 days) on 4x V100 GPUs, each with 32GB VRAM.<br>
 
 ## Repository Structure
+
+```
+view-fusion
+├── configs                    # various experiment configurations
+├── data                       # everything data preparation and loading related
+│   ├── __init__.py
+│   ├── dataset_prep.py           # script to shard the dataset
+│   ├── msn_dataset.py            # not in use
+│   └── nmr_dataset.py            # sample processing, dataloaders, nodesplitters
+├── logs                       # default loging directory
+│   └── pretrained                # default pretrained model directory
+│       └── config.yaml           # pretrained model configuration
+├── model                      # everything model related
+│   ├── unet.py                   # unet architecture (used for denoising)
+│   └── view_fusion.py            # DDPM and composable weighting logic
+├── slurm                      # some slurm script examples
+├── utils                      # various utilities
+│   ├── __init__.py
+│   ├── analysis.ipynb            # obsolete
+│   ├── checkpoint.py             # checkpointing logic
+│   ├── compute_metrics.py        # computes metrics on a directory containing all generated test samples
+│   ├── dist.py                   # distributed training helpers
+│   ├── metrics.py                # SSIM and PSNR functions
+│   ├── nerf.py                   # not in use
+│   ├── plot_dataset.py           # obsolete
+│   └── schedulers.py             # learning rate scheduler
+├── .gitignore
+├── LICENSE
+├── README.md
+├── demo.ipynb
+├── environment.yml
+├── environment_osx.yml
+├── experiment.py              # full experiment logic, including training, validation and inference
+├── fetch_dataset.sh           # script for downloading dataset
+├── fetch_pretrained.sh        # script for downloading pretrained model weights
+├── inference.py               # obsolete
+└── main.py                    # main
+```
 
 <!-- ## Results
 
