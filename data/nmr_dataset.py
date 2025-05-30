@@ -78,7 +78,7 @@ def create_webdataset(path, mode, start_shard=0, end_shard=3, **kwargs):
                 path,
                 f"NMR-{mode}-{start_shard:02d}.tar",
             ),
-            shardshuffle=True,
+            shardshuffle=True if mode != "visual" else False,
             resampled=True,
         )
 
@@ -88,11 +88,12 @@ def create_webdataset(path, mode, start_shard=0, end_shard=3, **kwargs):
                 path,
                 f"NMR-{mode}-{{{start_shard:02d}..{end_shard:02d}}}.tar",
             ),
-            shardshuffle=True,
+            shardshuffle=True if mode != "visual" else False,
             resampled=True,
             nodesplitter=nodesplitter if torch.distributed.is_initialized() else None,
         )
 
-    return (
-        webdataset.shuffle(1000).decode("rgb").map(partial(process_sample, mode=mode))
-    )
+    if mode != "visual":
+        webdataset.shuffle(1000)
+
+    return webdataset.decode("rgb").map(partial(process_sample, mode=mode))

@@ -79,9 +79,17 @@ def shard_dataset(
     tar_sink = wds.TarWriter(
         os.path.join(dest_dir, f"NMR-{split}-{shard_idx:02}.tar"), encoder=False
     )
+
+    if split == "test":
+        tar_sink_visual = wds.TarWriter(
+            os.path.join(dest_dir, f"NMR-visual-{shard_idx:02}.tar"), encoder=False
+        )
+
     for key in metadata.keys():
         if metadata[key]["name"] in withheld:
             continue
+
+        class_written = False
         for dir_name in metadata[key]["list"]:
 
             sample = {"__key__": f"{dir_name.split('/')[-2]}-{dir_name.split('/')[-1]}"}
@@ -92,6 +100,11 @@ def shard_dataset(
             sample["cameras"] = src_zip.read(f"{dir_name}/cameras.npz")
             tar_sink.write(sample)
             sample_no += 1
+
+            if split == "test" and not class_written:
+                tar_sink_visual.write(sample)
+                class_written = True
+
             if sample_no == limit:
                 sample_no = 0
                 shard_idx += 1

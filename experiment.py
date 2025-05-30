@@ -31,7 +31,7 @@ class Experiment:
 
         self.log_dict = dict()
 
-        if args.inference or args.resume:
+        if args.inference or args.resume or args.eval:
             if args.src is None:
                 raise ValueError("Source directory (-s, --src_dir) must be provided.")
             self.out_dir = Path(args.src)
@@ -145,6 +145,7 @@ class Experiment:
             load_dict = dict()
 
         self.it = load_dict.get("it", -1)
+        print("current iteration", self.it)
         self.time_elapsed = load_dict.get("t", 0.0)
         self.run_id = load_dict.get("run_id", None)
         self.max_views = self.config["data"]["params"]["max_views"]
@@ -193,6 +194,9 @@ class Experiment:
         val_dataset = create_webdataset(
             **self.config["data"]["params"]["test"]["params"]
         )
+        val_vis_dataset = create_webdataset(
+            self.config["data"]["params"]["test"]["params"]["path"], "visual", 0, 0
+        )
         print("Validation set loaded.")
 
         testset_size = self.config["data"]["params"]["test"]["params"].get("size", 8751)
@@ -208,8 +212,8 @@ class Experiment:
         ).with_epoch(epoch_size)
 
         val_vis_loader = wds.WebLoader(
-            val_dataset,
-            batch_size=12,
+            val_vis_dataset,
+            batch_size=13,
             worker_init_fn=worker_init_fn,
         )
 
@@ -312,10 +316,84 @@ class Experiment:
                     exit(0)
 
     def eval(self):
+        print("Running incremental metric evaluation...")
+        self.model.eval()
+
+        generated_batches = list()
+        ground_truth_batches = list()
+        eval_dict = dict()
+
+        for i in (12, 16, 23):
+            for val_batch in self.val_loader:
+                target = val_batch["target"].to(self.device)
+                cond = (
+                    val_batch["cond"].to(self.device)
+                    if not self.relative
+                    else val_batch["relative_cond"].to(self.device)
+                )
+                # view_count = torch.randint(
+                #     1, self.max_views + 1, (target.shape[0],)
+                # ).to(self.device)
+                view_count = torch.full((target.shape[0],), i).to(self.device)
+                angle = (
+                    val_batch["angle"].to(self.device)
+                    if not self.relative
+                    else val_batch["relative_angle"]
+                )
+
+                with torch.no_grad():
+                    self.model.weighting_inference = True
+                    *_, generated_samples = self.model(
+                        y_cond=cond,
+                        view_count=view_count,
+                        angle=angle,
+                        generate=True,
+                    )
+                    generated_batches.append(generated_samples)
+                    ground_truth_batches.append(target)
+
+            print("Completed generation.")
+            if torch.distributed.is_initialized():
+                torch.distributed.barrier()
+
+            ssims = list()
+            psnrs = list()
+            print("Computing metrics.")
+            for gt_batch, generated_batch in zip(
+                ground_truth_batches, generated_batches
+            ):
+                ssims.append(compute_ssim(generated_batch, gt_batch))
+                psnrs.append(compute_psnr(generated_batch, gt_batch))
+
+            ssims = torch.cat(ssims)
+            psnrs = torch.cat(psnrs)
+
+            eval_dict["ssim"] = torch.mean(ssims)
+            eval_dict["psnr"] = torch.mean(psnrs)
+
+            print("Computed metrics.")
+
+            if torch.distributed.is_initialized():
+                torch.distributed.barrier()
+            reduced_dict = reduce_dict(eval_dict)
+            if torch.distributed.is_initialized():
+                torch.distributed.barrier()
+            print("Reduced eval dict.")
+
+            self.log_dict["ssim"] = reduced_dict["ssim"]
+            self.log_dict["psnr"] = reduced_dict["psnr"]
+
+            print(f"View count: {i}")
+            print(f"SSIM: {reduced_dict['ssim']}")
+            print(f"PSNR: {reduced_dict['psnr']}")
+
+        exit(0)
+
         print("Running metric evaluation...")
         self.model.eval()
 
         generated_batches = list()
+        generated_batches_unweighted = list()
         ground_truth_batches = list()
         eval_dict = dict()
 
@@ -326,7 +404,9 @@ class Experiment:
                 if not self.relative
                 else val_batch["relative_cond"].to(self.device)
             )
-            view_count = torch.randint(1, self.max_views + 1, (target.shape[0],))
+            view_count = torch.randint(1, self.max_views + 1, (target.shape[0],)).to(
+                self.device
+            )
             angle = (
                 val_batch["angle"].to(self.device)
                 if not self.relative
@@ -334,6 +414,7 @@ class Experiment:
             )
 
             with torch.no_grad():
+                self.model.weighting_inference = True
                 *_, generated_samples = self.model(
                     y_cond=cond,
                     view_count=view_count,
@@ -341,33 +422,69 @@ class Experiment:
                     generate=True,
                 )
                 generated_batches.append(generated_samples)
+
+                self.model.weighting_inference = False
+                *_, generated_samples_unweighted = self.model(
+                    y_cond=cond,
+                    view_count=view_count,
+                    angle=angle,
+                    generate=True,
+                )
+                generated_batches_unweighted.append(generated_samples_unweighted)
+
                 ground_truth_batches.append(target)
 
         print("Completed generation.")
-        torch.distributed.barrier()
+        if torch.distributed.is_initialized():
+            torch.distributed.barrier()
 
         ssims = list()
         psnrs = list()
+        ssims_unweighted = list()
+        psnrs_unweighted = list()
         print("Computing metrics.")
-        for gt_batch, generated_batch in zip(ground_truth_batches, generated_batches):
+        for gt_batch, generated_batch, generated_batch_unweighted in zip(
+            ground_truth_batches, generated_batches, generated_batches_unweighted
+        ):
             ssims.append(compute_ssim(generated_batch, gt_batch))
             psnrs.append(compute_psnr(generated_batch, gt_batch))
+
+            ssims_unweighted.append(compute_ssim(generated_batch_unweighted, gt_batch))
+            psnrs_unweighted.append(compute_psnr(generated_batch_unweighted, gt_batch))
 
         ssims = torch.cat(ssims)
         psnrs = torch.cat(psnrs)
 
+        ssims_unweighted = torch.cat(ssims_unweighted)
+        psnrs_unweighted = torch.cat(psnrs_unweighted)
+
         eval_dict["ssim"] = torch.mean(ssims)
         eval_dict["psnr"] = torch.mean(psnrs)
 
+        eval_dict["ssim_unweighted"] = torch.mean(ssims_unweighted)
+        eval_dict["psnr_unweighted"] = torch.mean(psnrs_unweighted)
+
         print("Computed metrics.")
 
-        torch.distributed.barrier()
+        if torch.distributed.is_initialized():
+            torch.distributed.barrier()
         reduced_dict = reduce_dict(eval_dict)
-        torch.distributed.barrier()
+        if torch.distributed.is_initialized():
+            torch.distributed.barrier()
         print("Reduced eval dict.")
 
         self.log_dict["ssim"] = reduced_dict["ssim"]
         self.log_dict["psnr"] = reduced_dict["psnr"]
+
+        print(f"Weighting: True")
+        print(f"SSIM: {reduced_dict['ssim']}")
+        print(f"PSNR: {reduced_dict['psnr']}")
+
+        print("Weighting: False")
+        print(f"SSIM: {reduced_dict['ssim_unweighted']}")
+        print(f"PSNR: {reduced_dict['psnr_unweighted']}")
+
+        exit(0)
 
         # Save best metric models if currently training
         if self.args.train:
@@ -396,66 +513,68 @@ class Experiment:
         fill_missing = False
         generate = False
 
-        if self.args.train:
-            print("Running image generation...")
+        print("Running image generation...")
 
-            target = self.val_vis_data["target"].to(self.device)
-            cond = (
-                self.val_vis_data["cond"].to(self.device)
-                if not self.relative
-                else self.val_vis_data["relative_cond"].to(self.device)
+        target = self.val_vis_data["target"].to(self.device)
+        cond = (
+            self.val_vis_data["cond"].to(self.device)
+            if not self.relative
+            else self.val_vis_data["relative_cond"].to(self.device)
+        )
+        view_count = torch.randint(1, self.max_views + 1, (target.shape[0],)).to(
+            self.device
+        )
+        angle = (
+            self.val_vis_data["angle"].to(self.device)
+            if not self.relative
+            else self.val_vis_data["relative_angle"].to(self.device)
+        )
+
+        _, generated_batch, *_ = self.model(
+            y_cond=cond,
+            view_count=view_count,
+            angle=angle,
+            generate=True,
+        )
+
+        if self.relative:
+            cond_padded = torch.nn.utils.rnn.pad_sequence(
+                [cond[i, :view_idx, 3:] for i, view_idx in enumerate(view_count)],
+                batch_first=True,
+                padding_value=1.0,
             )
-            view_count = torch.randint(1, self.max_views + 1, (target.shape[0],)).to(
-                self.device
-            )
-            angle = (
-                self.val_vis_data["angle"].to(self.device)
-                if not self.relative
-                else self.val_vis_data["relative_angle"].to(self.device)
+        else:
+            cond_padded = torch.nn.utils.rnn.pad_sequence(
+                [cond[i, :view_idx] for i, view_idx in enumerate(view_count)],
+                batch_first=True,
+                padding_value=1.0,
             )
 
-            _, generated_batch, *_ = self.model(
-                y_cond=cond,
-                view_count=view_count,
-                angle=angle,
-                generate=True,
-            )
+        output = torch.cat(
+            (
+                torch.clamp(generated_batch, 0, 1),
+                torch.unsqueeze(target, 1),
+                cond_padded,
+            ),
+            dim=1,
+        )
 
-            if self.relative:
-                cond_padded = torch.nn.utils.rnn.pad_sequence(
-                    [cond[i, :view_idx, 3:] for i, view_idx in enumerate(view_count)],
-                    batch_first=True,
-                )
-            else:
-                cond_padded = torch.nn.utils.rnn.pad_sequence(
-                    [cond[i, :view_idx] for i, view_idx in enumerate(view_count)],
-                    batch_first=True,
-                )
-
-            output = torch.cat(
-                (
-                    torch.clamp(generated_batch, 0, 1),
-                    torch.unsqueeze(target, 1),
-                    cond_padded,
+        if self.wandb_enabled:
+            self.log_dict["output_visual"] = wandb.Image(
+                make_grid(
+                    rearrange(output, "b s c h w -> (b s) c h w"),
+                    nrow=output.shape[1],
+                    scale_each=True,
+                    pad_value=0.9,
                 ),
-                dim=1,
+                caption="Denoising steps, Target, Input View",
             )
 
-            if self.wandb_enabled:
-                self.log_dict["output"] = wandb.Image(
-                    make_grid(
-                        rearrange(output, "b s c h w -> (b s) c h w"),
-                        nrow=output.shape[1],
-                        scale_each=True,
-                    ),
-                    caption="Denoising steps, Target, Input View",
-                )
+        else:
+            # TODO save locally
+            pass
 
-            else:
-                # TODO save locally
-                pass
-
-        elif self.args.inference:
+        if self.args.inference:
             if self.args.extrapolate:
                 self.__extrapolate()
 

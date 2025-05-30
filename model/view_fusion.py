@@ -193,11 +193,12 @@ class ViewFusion(nn.Module):
         ]
         weight_arr = list()
         logit_arr = list()
-        for i in tqdm(
-            reversed(range(0, self.num_timesteps)),
-            desc="Sampling loop time step",
-            total=self.num_timesteps,
-        ):
+        # for i in tqdm(
+        #     reversed(range(0, self.num_timesteps)),
+        #     desc="Sampling loop time step",
+        #     total=self.num_timesteps,
+        # ):
+        for i in reversed(range(0, self.num_timesteps)):
             t = torch.full((b,), i, device=y_cond.device, dtype=torch.long)
             y_t, logits, weights = self.p_sample(y_t, y_cond, view_count, angle, t)
             if i % sample_inter == 0:
